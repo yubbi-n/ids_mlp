@@ -207,12 +207,24 @@ def train_and_evaluate(
     plt.savefig(f"{output_dir}/{dataset_name}_curves.png", dpi=150)
     plt.close(fig)
 
+    # Scale the figure and tick labels with the number of classes -- with a
+    # few dozen IDS attack classes (e.g. CICIoT2023's 34), a fixed small
+    # figure with annotated cell values becomes unreadable (overlapping
+    # numbers/labels), so annotation is dropped and the font shrinks once
+    # there are too many classes to label individually.
     cm = confusion_matrix(y_true, preds, normalize="true")
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(
-        cm, annot=True, fmt=".2f", cmap="Blues",
+    n_classes = len(le.classes_)
+    fig_side = max(6, n_classes * 0.45)
+    tick_fontsize = 9 if n_classes <= 15 else max(5, 9 - (n_classes - 15) // 5)
+
+    plt.figure(figsize=(fig_side, fig_side))
+    ax = sns.heatmap(
+        cm, annot=n_classes <= 15, fmt=".2f", cmap="Blues",
         xticklabels=le.classes_, yticklabels=le.classes_,
+        square=True,
     )
+    ax.tick_params(axis="x", labelsize=tick_fontsize, rotation=90)
+    ax.tick_params(axis="y", labelsize=tick_fontsize, rotation=0)
     plt.title(f"{dataset_name} - Normalized Confusion Matrix")
     plt.ylabel("True label")
     plt.xlabel("Predicted label")
