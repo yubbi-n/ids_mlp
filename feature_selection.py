@@ -39,6 +39,7 @@ Usage:
 """
 
 import argparse
+import os
 
 import numpy as np
 import pandas as pd
@@ -202,6 +203,8 @@ def run_feature_selection(
     output_dir: str = ".",
 ):
     topk = topk or [10, 20, 30]
+
+    os.makedirs(output_dir, exist_ok=True)
 
     df = pd.read_csv(csv_path)
     X_df, y, le = preprocess_full_pipeline(

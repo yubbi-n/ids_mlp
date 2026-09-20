@@ -24,6 +24,7 @@ NOTE (ambiguity to confirm with authors -- see README.md for the full list):
 """
 
 import argparse
+import os
 import time
 
 import numpy as np
@@ -76,6 +77,8 @@ def train_and_evaluate(
     dataset_name: str = "dataset",
     output_dir: str = ".",
 ):
+    os.makedirs(output_dir, exist_ok=True)
+
     df = pd.read_csv(csv_path)
     X_df, y, le = preprocess_full_pipeline(
         df, label_col, categorical_cols, categorical_mode=categorical_mode
