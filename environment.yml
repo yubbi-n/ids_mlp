@@ -1,0 +1,20 @@
+name: ids_mlp
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  # CPU-only PyTorch build. If you have an NVIDIA GPU, remove `cpuonly` below
+  # and follow https://pytorch.org/get-started/locally/ for the matching
+  # `pytorch-cuda=<version>` package for your CUDA driver instead.
+  - pytorch
+  - cpuonly
+  - pip:
+      - shap
