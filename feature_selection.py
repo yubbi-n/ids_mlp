@@ -39,7 +39,9 @@ Usage:
 """
 
 import argparse
+import json
 import os
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -248,6 +250,27 @@ def run_feature_selection(
     topk = topk or [10, 20, 30]
 
     os.makedirs(output_dir, exist_ok=True)
+
+    run_settings = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "csv_path": csv_path,
+        "label_col": label_col,
+        "categorical_cols": categorical_cols or [],
+        "categorical_mode": categorical_mode,
+        "topk": topk,
+        "shap_model": shap_model,
+        "rf_n_estimators": rf_n_estimators,
+        "rf_n_jobs": rf_n_jobs,
+        "rf_max_depth": rf_max_depth,
+        "shap_sample_size": shap_sample_size,
+        "shap_background_size": shap_background_size,
+        "mlp_epochs": mlp_epochs,
+        "test_size": test_size,
+        "seed": seed,
+        "dataset_name": dataset_name,
+    }
+    with open(f"{output_dir}/{dataset_name}_run_settings.json", "w") as f:
+        json.dump(run_settings, f, indent=2)
 
     df = pd.read_csv(csv_path)
     X_df, y, le = preprocess_full_pipeline(
