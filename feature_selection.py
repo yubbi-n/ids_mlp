@@ -55,7 +55,7 @@ from preprocess import preprocess_full_pipeline
 
 
 def rf_importance(X_train: np.ndarray, y_train: np.ndarray, seed: int,
-                   n_estimators: int = 300, verbose: int = 1, n_jobs: int = -1,
+                   n_estimators: int = 300, verbose: int = 1, n_jobs: int = 2,
                    max_depth: int | None = None):
     """
     Method 1: Random Forest feature importance (mean decrease in impurity).
@@ -65,9 +65,8 @@ def rf_importance(X_train: np.ndarray, y_train: np.ndarray, seed: int,
     finishes, which is the only progress signal available for a long RF fit
     on a large dataset (there's no percentage-complete API to poll).
 
-    `n_jobs` defaults to -1 (all cores) but should be set explicitly on a
-    shared machine (e.g. a lab server) to avoid taking every core from
-    other users.
+    `n_jobs` defaults to 2 to be considerate on a shared machine (e.g. a
+    lab server) -- pass -1 explicitly to use every available core.
 
     `max_depth` defaults to None (sklearn's default: nodes expand until
     leaves are pure), which on a multi-million-row dataset can produce very
@@ -236,7 +235,7 @@ def run_feature_selection(
     shap_model: str = "rf",
     rf_n_estimators: int = 300,
     rf_verbose: int = 1,
-    rf_n_jobs: int = -1,
+    rf_n_jobs: int = 2,
     rf_max_depth: int | None = None,
     shap_sample_size: int = 500,
     shap_background_size: int = 100,
@@ -329,9 +328,9 @@ if __name__ == "__main__":
     parser.add_argument("--rf_verbose", type=int, default=1,
                          help="RandomForestClassifier verbosity (0=silent, "
                               "1=per-tree progress via joblib, 2=more detail)")
-    parser.add_argument("--rf_n_jobs", type=int, default=-1,
-                         help="CPU cores for the Random Forest fit (-1=all cores). "
-                              "Set explicitly (e.g. 4) on a shared machine.")
+    parser.add_argument("--rf_n_jobs", type=int, default=2,
+                         help="CPU cores for the Random Forest fit. Defaults to 2 to "
+                              "be considerate on a shared machine; pass -1 for all cores.")
     parser.add_argument("--rf_max_depth", type=int, default=None,
                          help="Cap tree depth (default: unlimited, sklearn's default). "
                               "Recommended on large datasets -- unbounded trees blow up "
