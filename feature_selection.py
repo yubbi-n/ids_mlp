@@ -49,6 +49,7 @@ from scipy.stats import spearmanr
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+from tqdm import tqdm
 
 from preprocess import preprocess_full_pipeline
 
@@ -101,17 +102,37 @@ def _mean_abs_shap(shap_values) -> np.ndarray:
     return np.abs(values).mean(axis=0)
 
 
+def _concat_shap_chunks(chunks):
+    """Concatenate per-chunk shap_values() outputs back into one array/list,
+    handling both the list-of-per-class-arrays and ndarray return shapes."""
+    if isinstance(chunks[0], list):
+        n_classes = len(chunks[0])
+        return [np.concatenate([c[k] for c in chunks], axis=0) for k in range(n_classes)]
+    return np.concatenate(chunks, axis=0)
+
+
 def shap_importance_from_rf(rf: RandomForestClassifier, X_train: np.ndarray,
-                             sample_size: int, seed: int):
-    """Method 2 (default target): SHAP on the Random Forest via TreeExplainer."""
+                             sample_size: int, seed: int, chunk_size: int = 50):
+    """
+    Method 2 (default target): SHAP on the Random Forest via TreeExplainer.
+
+    The sample is explained in chunks (default 50 rows) under a tqdm
+    progress bar instead of one single explainer.shap_values() call --
+    SHAP gives no progress feedback of its own, and on a large/deep forest
+    a single call can run for a long time with zero visible output.
+    """
     rng = np.random.RandomState(seed)
     n = min(sample_size, X_train.shape[0])
     idx = rng.choice(X_train.shape[0], size=n, replace=False)
     X_sample = X_train[idx]
 
     explainer = shap.TreeExplainer(rf)
-    shap_values = explainer.shap_values(X_sample)
-    return _mean_abs_shap(shap_values)
+    chunks = [X_sample[i:i + chunk_size] for i in range(0, len(X_sample), chunk_size)]
+    values_per_chunk = [
+        explainer.shap_values(chunk)
+        for chunk in tqdm(chunks, desc="SHAP (RF)", unit="chunk")
+    ]
+    return _mean_abs_shap(_concat_shap_chunks(values_per_chunk))
 
 
 def shap_importance_from_mlp(X_train: np.ndarray, y_train: np.ndarray,
