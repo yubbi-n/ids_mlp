@@ -97,3 +97,15 @@ NSL-KDD를 사용하는 경우 `remap_nslkdd_labels.py`로 원본 공격 레이�
   추정치를 사용.
 - 80/20 split의 stratify 여부, random seed 값도 논문에 명시되어 있지
   않음 — 현재 구현은 `stratify=y`, `seed=42`를 기본값으로 사용.
+- 논문이 학습을 한 번만 돌려서 보고했는지, 여러 번 돌려 평균/표준편차를
+  낸 것인지 불명확 — Section 4.1에는 "80/20 split"만 언급되고 반복 실행
+  여부는 명시되어 있지 않음. 본 재현은 기본적으로 단일 실행 기준.
+- `train.py`는 lr=0.003이 이 모델/데이터 규모엔 다소 높아 학습 곡선이
+  진동하는 경향이 있어(README 재현 로그 참고), epoch 100의 값을 그대로
+  최종 성능으로 쓰면 "우연히 어느 epoch에서 끝났는지"에 좌우되는 문제가
+  있었음. 이를 보완하기 위해 train을 다시 train/validation으로 나누고
+  (`--val_size`, 기본 0.1), **validation accuracy가 가장 높았던 epoch의
+  가중치**를 최종 평가(test set)에 사용하도록 변경 — test set은 모델
+  선택에 전혀 관여하지 않아 결과가 낙관적으로 치우치지 않음. 논문의
+  문자 그대로의 80/20 split을 원하면 `--val_size 0`으로 이전 동작(마지막
+  epoch 기준, test set으로 best-epoch 선택)으로 되돌릴 수 있음.
