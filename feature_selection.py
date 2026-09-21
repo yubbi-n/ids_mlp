@@ -54,10 +54,30 @@ from preprocess import preprocess_full_pipeline
 
 
 def rf_importance(X_train: np.ndarray, y_train: np.ndarray, seed: int,
-                   n_estimators: int = 300):
-    """Method 1: Random Forest feature importance (mean decrease in impurity)."""
+                   n_estimators: int = 300, verbose: int = 1, n_jobs: int = -1,
+                   max_depth: int | None = None):
+    """
+    Method 1: Random Forest feature importance (mean decrease in impurity).
+
+    `verbose` is passed straight to RandomForestClassifier: with n_jobs != 1,
+    sklearn/joblib print a "building tree K of N" line as each tree
+    finishes, which is the only progress signal available for a long RF fit
+    on a large dataset (there's no percentage-complete API to poll).
+
+    `n_jobs` defaults to -1 (all cores) but should be set explicitly on a
+    shared machine (e.g. a lab server) to avoid taking every core from
+    other users.
+
+    `max_depth` defaults to None (sklearn's default: nodes expand until
+    leaves are pure), which on a multi-million-row dataset can produce very
+    large, deep trees -- driving up both RF fit memory and, especially,
+    downstream SHAP TreeExplainer time (SHAP's exact tree algorithm scales
+    with tree depth). Capping it (e.g. 20) keeps both tractable with only a
+    minor effect on the resulting importance ranking.
+    """
     rf = RandomForestClassifier(
-        n_estimators=n_estimators, random_state=seed, n_jobs=-1
+        n_estimators=n_estimators, random_state=seed, n_jobs=n_jobs, verbose=verbose,
+        max_depth=max_depth,
     )
     rf.fit(X_train, y_train)
     return rf, rf.feature_importances_
@@ -194,6 +214,9 @@ def run_feature_selection(
     topk: list[int] | None = None,
     shap_model: str = "rf",
     rf_n_estimators: int = 300,
+    rf_verbose: int = 1,
+    rf_n_jobs: int = -1,
+    rf_max_depth: int | None = None,
     shap_sample_size: int = 500,
     shap_background_size: int = 100,
     mlp_epochs: int = 30,
@@ -221,7 +244,8 @@ def run_feature_selection(
     scaler = MinMaxScaler()
     X_train = scaler.fit_transform(X_train_raw)
 
-    rf, rf_imp = rf_importance(X_train, y_train, seed=seed, n_estimators=rf_n_estimators)
+    rf, rf_imp = rf_importance(X_train, y_train, seed=seed, n_estimators=rf_n_estimators,
+                                verbose=rf_verbose, n_jobs=rf_n_jobs, max_depth=rf_max_depth)
 
     if shap_model == "rf":
         shap_imp = shap_importance_from_rf(rf, X_train, sample_size=shap_sample_size, seed=seed)
@@ -281,6 +305,16 @@ if __name__ == "__main__":
              "or the paper's LightweightMLP_IDS (research plan allows either)",
     )
     parser.add_argument("--rf_n_estimators", type=int, default=300)
+    parser.add_argument("--rf_verbose", type=int, default=1,
+                         help="RandomForestClassifier verbosity (0=silent, "
+                              "1=per-tree progress via joblib, 2=more detail)")
+    parser.add_argument("--rf_n_jobs", type=int, default=-1,
+                         help="CPU cores for the Random Forest fit (-1=all cores). "
+                              "Set explicitly (e.g. 4) on a shared machine.")
+    parser.add_argument("--rf_max_depth", type=int, default=None,
+                         help="Cap tree depth (default: unlimited, sklearn's default). "
+                              "Recommended on large datasets -- unbounded trees blow up "
+                              "RF memory and make SHAP TreeExplainer very slow.")
     parser.add_argument("--shap_sample_size", type=int, default=500)
     parser.add_argument("--shap_background_size", type=int, default=100)
     parser.add_argument("--mlp_epochs", type=int, default=30,
@@ -299,6 +333,9 @@ if __name__ == "__main__":
         topk=args.topk,
         shap_model=args.shap_model,
         rf_n_estimators=args.rf_n_estimators,
+        rf_verbose=args.rf_verbose,
+        rf_n_jobs=args.rf_n_jobs,
+        rf_max_depth=args.rf_max_depth,
         shap_sample_size=args.shap_sample_size,
         shap_background_size=args.shap_background_size,
         mlp_epochs=args.mlp_epochs,
