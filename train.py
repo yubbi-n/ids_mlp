@@ -24,6 +24,7 @@ NOTE (ambiguity to confirm with authors -- see README.md for the full list):
 """
 
 import argparse
+import copy
 import os
 import time
 
@@ -73,6 +74,7 @@ def train_and_evaluate(
     lr: float = 3e-3,
     weight_decay: float = 1e-4,
     test_size: float = 0.2,
+    val_size: float = 0.1,
     seed: int = 42,
     dataset_name: str = "dataset",
     output_dir: str = ".",
@@ -84,19 +86,39 @@ def train_and_evaluate(
         df, label_col, categorical_cols, categorical_mode=categorical_mode
     )
 
-    X_train, X_test, y_train, y_test = train_test_split(
+    # 3-way split: test_size held out for the FINAL report only, never seen
+    # during training or for checkpoint selection. val_size (also a fraction
+    # of the full dataset) is used only to pick the best-epoch checkpoint --
+    # picking that checkpoint by test accuracy would leak the test set into
+    # model selection and bias the reported numbers optimistically.
+    # NOTE: the paper (Section 4.1) describes a plain 80/20 train/test split;
+    # this 3-way split is a deliberate deviation for a methodologically
+    # sound "best epoch" (see train_and_evaluate's best-checkpoint logic
+    # below). Pass val_size=0 to fall back to a plain 80/20 split.
+    X_temp, X_test, y_temp, y_test = train_test_split(
         X_df.values.astype(np.float32), y,
         test_size=test_size, random_state=seed, stratify=y,
     )
+    if val_size > 0:
+        val_frac_of_temp = val_size / (1 - test_size)
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=val_frac_of_temp, random_state=seed, stratify=y_temp,
+        )
+    else:
+        X_train, y_train = X_temp, y_temp
+        X_val, y_val = X_test, y_test  # no held-out val: fall back to test-based selection
 
     scaler = MinMaxScaler()
     X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
     X_test = scaler.transform(X_test)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     X_train_t = torch.tensor(X_train, dtype=torch.float32)
     y_train_t = torch.tensor(y_train, dtype=torch.long)
+    X_val_t = torch.tensor(X_val, dtype=torch.float32).to(device)
+    y_val_t = torch.tensor(y_val, dtype=torch.long).to(device)
     X_test_t = torch.tensor(X_test, dtype=torch.float32).to(device)
     y_test_t = torch.tensor(y_test, dtype=torch.long).to(device)
 
@@ -114,8 +136,11 @@ def train_and_evaluate(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
 
-    train_acc_hist, test_acc_hist = [], []
-    train_loss_hist, test_loss_hist = [], []
+    train_acc_hist, val_acc_hist = [], []
+    train_loss_hist, val_loss_hist = [], []
+    best_val_acc = -1.0
+    best_epoch = -1
+    best_state = None
 
     start_train = time.time()
     for epoch in range(epochs):
@@ -138,23 +163,40 @@ def train_and_evaluate(
 
         model.eval()
         with torch.no_grad():
-            test_logits = model(X_test_t)
-            test_loss = criterion(test_logits, y_test_t).item()
-            test_acc = (test_logits.argmax(dim=1) == y_test_t).float().mean().item()
+            val_logits = model(X_val_t)
+            val_loss = criterion(val_logits, y_val_t).item()
+            val_acc = (val_logits.argmax(dim=1) == y_val_t).float().mean().item()
 
         train_acc_hist.append(train_acc)
-        test_acc_hist.append(test_acc)
+        val_acc_hist.append(val_acc)
         train_loss_hist.append(train_loss)
-        test_loss_hist.append(test_loss)
+        val_loss_hist.append(val_loss)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_epoch = epoch + 1
+            best_state = copy.deepcopy(model.state_dict())
 
         if (epoch + 1) % 10 == 0 or epoch == 0:
             print(
                 f"[{dataset_name}] epoch {epoch + 1}/{epochs} "
                 f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} "
-                f"test_loss={test_loss:.4f} test_acc={test_acc:.4f}"
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
             )
 
     train_time = time.time() - start_train
+
+    # Report on the best-validation-accuracy epoch's weights rather than
+    # whatever epoch training happened to stop on: without an LR schedule
+    # the loss curve oscillates a lot (see the accuracy/loss plots), so the
+    # final epoch's number is a noisy, arbitrary landing point -- not a
+    # reliable basis for comparing runs (e.g. Baseline vs a Top-k feature
+    # subset). Selection uses the VALIDATION set, never the test set, so
+    # the final test-set metrics below stay an unbiased, held-out estimate.
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        print(f"[{dataset_name}] using best epoch {best_epoch}/{epochs} "
+              f"(val_acc={best_val_acc:.4f}) for final evaluation")
 
     # ---- final evaluation ----
     model.eval()
@@ -193,13 +235,16 @@ def train_and_evaluate(
     # ---- plots (accuracy/loss curves, confusion matrix -- Figures 2-4) ----
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     axes[0].plot(train_acc_hist, label="train")
-    axes[0].plot(test_acc_hist, label="test")
+    axes[0].plot(val_acc_hist, label="val")
+    if best_epoch > 0:
+        axes[0].axvline(best_epoch - 1, color="grey", linestyle="--", linewidth=1,
+                         label=f"best epoch ({best_epoch})")
     axes[0].set_title(f"{dataset_name} - Accuracy")
     axes[0].set_xlabel("epoch")
     axes[0].legend()
 
     axes[1].plot(train_loss_hist, label="train")
-    axes[1].plot(test_loss_hist, label="test")
+    axes[1].plot(val_loss_hist, label="val")
     axes[1].set_title(f"{dataset_name} - Loss")
     axes[1].set_xlabel("epoch")
     axes[1].legend()
@@ -237,6 +282,7 @@ def train_and_evaluate(
         "params": n_params, "flops": flops, "macs": macs,
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
+        "best_epoch": best_epoch,
     }
 
 
@@ -261,6 +307,13 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
+    parser.add_argument(
+        "--val_size", type=float, default=0.1,
+        help="Fraction of the full dataset held out for best-epoch checkpoint "
+             "selection (kept separate from the test set). Pass 0 for a plain "
+             "80/20 train/test split with no validation-based checkpointing "
+             "(closer to the paper's literal Section 4.1 description).",
+    )
     parser.add_argument("--output_dir", default=".")
     args = parser.parse_args()
 
@@ -274,6 +327,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        val_size=args.val_size,
         dataset_name=args.name,
         output_dir=args.output_dir,
     )
