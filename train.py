@@ -14,6 +14,15 @@ Usage:
         --categorical_cols protocol_type service flag \
         --name NSL-KDD
 
+Defaults follow the most literal reading of the paper (see README.md's
+ambiguities list for the reasoning behind each): embedding layer has no
+ReLU (Eq. 3), Min-Max scaling is fit on the full dataset before the split
+(Algorithm 1's step order), and the reported metrics are the literal final
+epoch's -- no best-checkpoint selection (never described in the paper).
+`--embedding_activation`, `--no_scale_before_split`, and
+`--select_best_epoch` opt into the non-literal alternative for each,
+respectively.
+
 NOTE (ambiguity to confirm with authors -- see README.md for the full list):
   - Exact FLOPs/MACs counting convention used to get their reported numbers
     (e.g. 45,200 FLOPs / 22,600 MACs for CICIDS2017) is not stated. This
@@ -21,6 +30,7 @@ NOTE (ambiguity to confirm with authors -- see README.md for the full list):
     may require knowing the profiling tool (thop / ptflops / fvcore / manual)
     they used.
   - Whether the 80/20 split was stratified and what random seed was used.
+  - Whether results were from a single run or averaged over several.
 """
 
 import argparse
@@ -69,13 +79,15 @@ def train_and_evaluate(
     label_col: str,
     categorical_cols=None,
     categorical_mode: str = "onehot",
-    embedding_activation: bool = True,
+    embedding_activation: bool = False,
     epochs: int = 100,
     batch_size: int = 128,
     lr: float = 3e-3,
     weight_decay: float = 1e-4,
     test_size: float = 0.2,
     val_size: float = 0.1,
+    select_best_epoch: bool = False,
+    scale_before_split: bool = True,
     seed: int = 42,
     dataset_name: str = "dataset",
     output_dir: str = ".",
@@ -87,32 +99,47 @@ def train_and_evaluate(
         df, label_col, categorical_cols, categorical_mode=categorical_mode
     )
 
-    # 3-way split: test_size held out for the FINAL report only, never seen
-    # during training or for checkpoint selection. val_size (also a fraction
-    # of the full dataset) is used only to pick the best-epoch checkpoint --
-    # picking that checkpoint by test accuracy would leak the test set into
-    # model selection and bias the reported numbers optimistically.
-    # NOTE: the paper (Section 4.1) describes a plain 80/20 train/test split;
-    # this 3-way split is a deliberate deviation for a methodologically
-    # sound "best epoch" (see train_and_evaluate's best-checkpoint logic
-    # below). Pass val_size=0 to fall back to a plain 80/20 split.
+    # `select_best_epoch=False` (default) is the literal reading of the
+    # paper (Section 4.1): a plain 80/20 train/test split, the model
+    # evaluated on test after each epoch purely for monitoring, and the
+    # FINAL reported metrics computed on whatever weights training happens
+    # to end on after all `epochs` -- no "pick the best epoch" step, since
+    # the paper never describes one.
+    #
+    # `select_best_epoch=True` is an explicit opt-in deviation: it carves a
+    # validation split out of train (`val_size`, a fraction of the full
+    # dataset) used only to choose the best-epoch checkpoint, and reports
+    # that checkpoint's test-set metrics instead of the final epoch's. This
+    # avoids the final-epoch number being an arbitrary point on a noisy,
+    # unscheduled-LR loss curve, at the cost of no longer being a literal
+    # reproduction of Section 4.1. Off by default for that reason.
+    X_all = X_df.values.astype(np.float32)
+
+    # `scale_before_split=True` matches the paper's Algorithm 1 step order
+    # (Section 3.1): Min-Max normalization applied to the full (X, Y)
+    # dataset before the Section 4.1 split. Default (False) fits the scaler
+    # on the train split only instead, so no test-set information leaks
+    # into the transform -- also defensible, but not the literal order.
+    if scale_before_split:
+        X_all = MinMaxScaler().fit_transform(X_all)
+
     X_temp, X_test, y_temp, y_test = train_test_split(
-        X_df.values.astype(np.float32), y,
-        test_size=test_size, random_state=seed, stratify=y,
+        X_all, y, test_size=test_size, random_state=seed, stratify=y,
     )
-    if val_size > 0:
+    if select_best_epoch and val_size > 0:
         val_frac_of_temp = val_size / (1 - test_size)
         X_train, X_val, y_train, y_val = train_test_split(
             X_temp, y_temp, test_size=val_frac_of_temp, random_state=seed, stratify=y_temp,
         )
     else:
         X_train, y_train = X_temp, y_temp
-        X_val, y_val = X_test, y_test  # no held-out val: fall back to test-based selection
+        X_val, y_val = X_test, y_test  # monitoring only -- see select_best_epoch above
 
-    scaler = MinMaxScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
+    if not scale_before_split:
+        scaler = MinMaxScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_val = scaler.transform(X_val)
+        X_test = scaler.transform(X_test)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -187,17 +214,18 @@ def train_and_evaluate(
 
     train_time = time.time() - start_train
 
-    # Report on the best-validation-accuracy epoch's weights rather than
-    # whatever epoch training happened to stop on: without an LR schedule
-    # the loss curve oscillates a lot (see the accuracy/loss plots), so the
-    # final epoch's number is a noisy, arbitrary landing point -- not a
-    # reliable basis for comparing runs (e.g. Baseline vs a Top-k feature
-    # subset). Selection uses the VALIDATION set, never the test set, so
-    # the final test-set metrics below stay an unbiased, held-out estimate.
-    if best_state is not None:
+    # See select_best_epoch's docstring note above: only load the tracked
+    # best-epoch checkpoint when explicitly opted in. Otherwise (default),
+    # the model is left exactly as training loop left it -- the literal
+    # final-epoch weights -- matching the paper's plain "train for `epochs`,
+    # then evaluate" description with no best-checkpoint step.
+    if select_best_epoch and best_state is not None:
         model.load_state_dict(best_state)
         print(f"[{dataset_name}] using best epoch {best_epoch}/{epochs} "
               f"(val_acc={best_val_acc:.4f}) for final evaluation")
+    else:
+        print(f"[{dataset_name}] using final epoch {epochs}/{epochs} for final evaluation "
+              f"(literal reproduction; pass --select_best_epoch to opt into best-checkpoint selection)")
 
     # ---- final evaluation ----
     model.eval()
@@ -283,7 +311,8 @@ def train_and_evaluate(
         "params": n_params, "flops": flops, "macs": macs,
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
-        "best_epoch": best_epoch, "epochs": epochs,
+        "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
+        "embedding_activation": embedding_activation,
         "csv_path": csv_path, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
@@ -305,8 +334,9 @@ if __name__ == "__main__":
         help="How to handle categorical_cols: one-hot encode, or drop entirely",
     )
     parser.add_argument(
-        "--no_embedding_activation", action="store_true",
-        help="Disable ReLU on the embedding layer (Eq. 3 literal reading)",
+        "--embedding_activation", action="store_true",
+        help="Apply ReLU on the embedding layer (Section 3.2 reading; default "
+             "off follows Eq. 3's literal no-activation affine transform)",
     )
     parser.add_argument("--name", default="dataset", help="Dataset name (for logging/plots)")
     parser.add_argument("--epochs", type=int, default=100)
@@ -314,11 +344,25 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument(
+        "--select_best_epoch", action="store_true",
+        help="Carve a validation split out of train (--val_size) and report the "
+             "checkpoint with the best validation accuracy instead of the final "
+             "epoch. Off by default: the paper's Section 4.1 describes a plain "
+             "80/20 split evaluated after training for --epochs, with no "
+             "best-checkpoint step.",
+    )
+    parser.add_argument(
         "--val_size", type=float, default=0.1,
         help="Fraction of the full dataset held out for best-epoch checkpoint "
-             "selection (kept separate from the test set). Pass 0 for a plain "
-             "80/20 train/test split with no validation-based checkpointing "
-             "(closer to the paper's literal Section 4.1 description).",
+             "selection when --select_best_epoch is set (kept separate from "
+             "the test set). Ignored otherwise.",
+    )
+    parser.add_argument(
+        "--no_scale_before_split", action="store_true",
+        help="Fit Min-Max scaling on the train split only, instead of on the "
+             "full dataset before splitting (Algorithm 1's literal order, "
+             "the default). The train-only fit avoids any test-set leakage "
+             "into the scaler but is not what Algorithm 1 literally shows.",
     )
     parser.add_argument("--output_dir", default=".")
     args = parser.parse_args()
@@ -328,12 +372,14 @@ if __name__ == "__main__":
         label_col=args.label_col,
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
-        embedding_activation=not args.no_embedding_activation,
+        embedding_activation=args.embedding_activation,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
         val_size=args.val_size,
+        select_best_epoch=args.select_best_epoch,
+        scale_before_split=not args.no_scale_before_split,
         dataset_name=args.name,
         output_dir=args.output_dir,
     )

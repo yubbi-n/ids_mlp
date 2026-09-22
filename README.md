@@ -109,28 +109,46 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
 
 ## 재현상 확인이 필요한 사항 (ambiguities)
 
+논문이 명시하지 않은 부분은 기본값을 **가장 문자 그대로에 가까운 쪽**으로
+맞춰뒀습니다. 성능을 더 끌어올리는 실험을 하고 싶을 때만 아래 플래그로
+의도적으로 벗어날 수 있게 열어둔 구조입니다.
+
 - `model.py`: 논문 Eq. (3)은 활성화 함수 없는 순수 affine 변환으로
   embedding을 정의하지만, 3.2절 본문은 "hidden layers"(복수형)에 ReLU를
-  적용한다고 서술 — 현재는 Eq. (3)을 문자 그대로 따르되
-  `embedding_activation` 플래그로 전환 가능하게 구현.
-- `preprocess.py`: Min-Max 정규화를 train/test split 이전(Algorithm 1
-  순서)에 전체 데이터에 fit할지, split 이후 train에만 fit할지 불명확 —
-  data leakage 방지를 위해 train에만 fit하도록 구현(`train.py`,
-  `feature_selection.py` 공통).
+  적용한다고 서술 — **기본값은 Eq. (3) 문자 그대로(ReLU 없음,
+  `embedding_activation=False`)**. `train.py --embedding_activation`으로
+  3.2절 해석(ReLU 있음)을 켤 수 있음.
+- `preprocess.py`/`train.py`: Min-Max 정규화를 train/test split 이전
+  (Algorithm 1 순서)에 전체 데이터에 fit할지, split 이후 train에만
+  fit할지 논문상 불명확 — **기본값은 Algorithm 1 순서 그대로 전체
+  데이터에 fit(`scale_before_split=True`)**. `train.py
+  --no_scale_before_split`으로 data leakage 없는 train-only fit으로
+  바꿀 수 있음 (`feature_selection.py`는 research plan 2.3-(4)의 별도
+  요구사항에 따라 항상 train-only fit).
 - `train.py`: FLOPs/MACs 계산에 사용한 프로파일링 도구(thop/ptflops/fvcore
   등)가 논문에 명시되어 있지 않음 — 현재는 weight 곱셈 기준 단순 해석적
   추정치를 사용.
 - 80/20 split의 stratify 여부, random seed 값도 논문에 명시되어 있지
-  않음 — 현재 구현은 `stratify=y`, `seed=42`를 기본값으로 사용.
+  않음 — 대체할 논문 명시값 자체가 없어 임의로 `stratify=y`, `seed=42`를
+  기본값으로 사용 (되돌릴 "문자 그대로"의 기준이 존재하지 않는 항목).
 - 논문이 학습을 한 번만 돌려서 보고했는지, 여러 번 돌려 평균/표준편차를
   낸 것인지 불명확 — Section 4.1에는 "80/20 split"만 언급되고 반복 실행
   여부는 명시되어 있지 않음. 본 재현은 기본적으로 단일 실행 기준.
 - `train.py`는 lr=0.003이 이 모델/데이터 규모엔 다소 높아 학습 곡선이
-  진동하는 경향이 있어(README 재현 로그 참고), epoch 100의 값을 그대로
-  최종 성능으로 쓰면 "우연히 어느 epoch에서 끝났는지"에 좌우되는 문제가
-  있었음. 이를 보완하기 위해 train을 다시 train/validation으로 나누고
-  (`--val_size`, 기본 0.1), **validation accuracy가 가장 높았던 epoch의
-  가중치**를 최종 평가(test set)에 사용하도록 변경 — test set은 모델
-  선택에 전혀 관여하지 않아 결과가 낙관적으로 치우치지 않음. 논문의
-  문자 그대로의 80/20 split을 원하면 `--val_size 0`으로 이전 동작(마지막
-  epoch 기준, test set으로 best-epoch 선택)으로 되돌릴 수 있음.
+  진동하는 경향이 있음. **기본값은 Section 4.1이 실제로 서술한 그대로
+  "100 epoch 학습 후 그 시점 가중치로 평가"** — best-checkpoint 선택
+  과정은 논문에 전혀 언급되지 않으므로 기본으로 켜지 않음
+  (`select_best_epoch=False`). 학습 곡선이 출렁여 마지막 epoch 값이
+  우연에 좌우되는 게 걱정되면 `--select_best_epoch`(+ `--val_size`)로
+  train을 다시 train/validation으로 나누고 validation accuracy가 가장
+  높았던 epoch의 가중치를 최종 평가에 쓰도록 켤 수 있음(test set은
+  선택에 관여하지 않아 낙관 편향은 없지만, 논문에 없는 절차라는 점은
+  동일).
+- CICIoT2023의 실제 클래스 개수(34-class 원본 vs 다른 CICIoT2023
+  논문들이 흔히 쓰는 8-class 카테고리)는 본 논문에 전혀 언급되어 있지
+  않음 — 34-class 그대로 쓰면 클래스 불균형으로 소수 클래스 recall이
+  0에 가까워지는 문제가 실측 확인되어(baseline accuracy 91%대, AUC는
+  0.99+로 모델 판별력 자체는 정상), **기본값을 8-class로 정함**
+  (`remap_ciciot2023_labels.py`, 3절 참고). "논문 미기재 항목"이라는
+  점에서 34-class와 8-class 둘 다 확인되지 않은 추정이지만, 8-class가
+  실용적으로 더 합리적인 기본값이라 판단.
