@@ -14,6 +14,8 @@ Intrusion Detection System in Internet of Things」(Chandroth & Ali,
 | `preprocess.py` | 논문 3.1절 전처리 파이프라인 (결측치/비유한값 제거 → 레이블 인코딩 → 원-핫 인코딩 → Min-Max 정규화) |
 | `train.py` | 논문 4절 학습/평가 (AdamW, lr=0.003, wd=1e-4, 100 epoch, batch 128, 80/20 split, Accuracy/Precision/Recall/F1/AUC, params/FLOPs/model size/시간 측정) |
 | `remap_nslkdd_labels.py` | NSL-KDD 원본 공격 레이블을 Normal/DoS/Probe/R2L/U2R 5-class로 매핑 |
+| `remap_ciciot2023_labels.py` | CICIoT2023 원본 34개 세부 레이블을 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/Web/BruteForce)로 매핑 — **CICIoT2023은 항상 이걸 거친 뒤 사용** (아래 3절 참고) |
+| `sample_dataset.py` | 클래스당 최대 N개로 상한을 두는 메모리 절약형 샘플링 (전체 클래스 유지) |
 | `feature_selection.py` | 연구계획서 2.3절 Feature Selection: Random Forest 기반 importance + SHAP 기반 importance 산출, 두 방식 비교(Spearman correlation, Top-k overlap), Top-k feature subset CSV 생성 |
 
 ## 1. 가상환경 설정 (conda)
@@ -81,6 +83,29 @@ python feature_selection.py --csv data/NSL-KDD_5class.csv --label_col label \
 NSL-KDD를 사용하는 경우 `remap_nslkdd_labels.py`로 원본 공격 레이블을
 5-class(Normal/DoS/Probe/R2L/U2R)로 변환한 뒤 `train.py --label_col`에
 매핑된 컬럼명을 지정하세요.
+
+### CICIoT2023은 항상 8-class로 매핑해서 사용 (34-class 금지)
+
+CICIoT2023 원본은 BenignTraffic + 33개 세부 공격 레이블(34-class)입니다.
+**이 34개를 그대로 학습에 쓰지 않습니다** — `DDoS-SYN_Flood` vs
+`DDoS-RSTFINFlood` vs `DDoS-ACK_Fragmentation`처럼 서로 거의 구분이 안
+되는 세부 유형들까지 다 구분하게 만드는 데다, 유형별 샘플 수 편차가 너무
+커서(수백 개~80만 개) 소수 클래스 recall이 0에 가깝게 무너지고 weighted
+accuracy가 크게 낮아집니다(실측: baseline 91%대, 반면 AUC는 0.99+로 모델
+자체의 판별력은 충분함 — 즉 세분화·불균형 문제이지 모델/코드 문제가
+아님). 원 논문도 CICIoT2023에서 몇 개 클래스를 썼는지 명시하지 않았고,
+대부분의 CICIoT2023 관련 논문은 공식 8-class(Benign + DDoS/DoS/Mirai/
+Recon/Spoofing/Web/BruteForce) 기준으로 성능을 보고합니다.
+
+**따라서 CICIoT2023 관련 스크립트를 돌리기 전, 항상 먼저 8-class로 변환하세요:**
+
+```bash
+python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
+    --out data/CICIOT23/train/train_8class.csv --label_col label
+```
+
+그 다음 `train.py`/`feature_selection.py`/`sample_dataset.py`에는 원본
+`train.csv`가 아니라 이 `train_8class.csv`를 `--csv`로 넘기세요.
 
 ## 재현상 확인이 필요한 사항 (ambiguities)
 
