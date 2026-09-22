@@ -25,6 +25,7 @@ NOTE (ambiguity to confirm with authors -- see README.md for the full list):
 
 import argparse
 import copy
+import json
 import os
 import time
 
@@ -277,13 +278,18 @@ def train_and_evaluate(
     plt.savefig(f"{output_dir}/{dataset_name}_confusion_matrix.png", dpi=150)
     plt.close()
 
-    return {
+    summary = {
         "accuracy": acc, "precision": prec, "recall": rec, "f1": f1, "auc": auc,
         "params": n_params, "flops": flops, "macs": macs,
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
-        "best_epoch": best_epoch,
+        "best_epoch": best_epoch, "epochs": epochs,
+        "csv_path": csv_path, "dataset_name": dataset_name,
     }
+    with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+
+    return summary
 
 
 if __name__ == "__main__":

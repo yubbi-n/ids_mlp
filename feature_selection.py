@@ -41,6 +41,7 @@ Usage:
 import argparse
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import numpy as np
@@ -287,9 +288,12 @@ def run_feature_selection(
     scaler = MinMaxScaler()
     X_train = scaler.fit_transform(X_train_raw)
 
+    start_rf = time.time()
     rf, rf_imp = rf_importance(X_train, y_train, seed=seed, n_estimators=rf_n_estimators,
                                 verbose=rf_verbose, n_jobs=rf_n_jobs, max_depth=rf_max_depth)
+    rf_time_s = time.time() - start_rf
 
+    start_shap = time.time()
     if shap_model == "rf":
         shap_imp = shap_importance_from_rf(rf, X_train, sample_size=shap_sample_size, seed=seed)
     elif shap_model == "mlp":
@@ -302,6 +306,9 @@ def run_feature_selection(
         )
     else:
         raise ValueError('shap_model must be "rf" or "mlp"')
+    shap_time_s = time.time() - start_shap
+
+    print(f"[{dataset_name}] RF fit: {rf_time_s:.1f}s, SHAP ({shap_model}): {shap_time_s:.1f}s")
 
     df_rank = rank_table(feature_names, rf_imp, shap_imp)
     df_rank.to_csv(f"{output_dir}/{dataset_name}_feature_ranking.csv", index=False)
@@ -323,6 +330,14 @@ def run_feature_selection(
         write_selected_csv(X_df, y, le, shap_order[:k], label_col,
                             f"{output_dir}/{dataset_name}_shap_top{k}.csv")
         print(f"Wrote {dataset_name}_rf_top{k}.csv / {dataset_name}_shap_top{k}.csv")
+
+    timing = {
+        "rf_fit_seconds": rf_time_s,
+        "shap_seconds": shap_time_s,
+        "total_seconds": rf_time_s + shap_time_s,
+    }
+    with open(f"{output_dir}/{dataset_name}_timing.json", "w") as f:
+        json.dump(timing, f, indent=2)
 
     return df_rank, comparison
 
