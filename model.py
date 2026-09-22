@@ -20,8 +20,9 @@ NOTE (ambiguity to confirm with authors):
   layer. However, Eq. (3) is written as a plain affine transform with no
   sigma(.) term:  z = W2 h1 + b2
   This implementation follows Eq. (3) literally (no ReLU on the embedding
-  layer). If the authors confirm ReLU should be applied there too, flip
-  `self.embedding_activation` to True.
+  layer) -- `embedding_activation` defaults to False accordingly. Pass
+  `embedding_activation=True` (train.py: `--embedding_activation`) if the
+  authors confirm ReLU should be applied there too.
 """
 
 import torch
@@ -31,7 +32,7 @@ import torch.nn as nn
 class LightweightMLP_IDS(nn.Module):
     def __init__(self, input_dim: int, num_classes: int,
                  hidden1: int = 128, embedding_dim: int = 64,
-                 embedding_activation: bool = True):
+                 embedding_activation: bool = False):
         super().__init__()
         self.hidden1 = nn.Linear(input_dim, hidden1)
         self.relu = nn.ReLU()
