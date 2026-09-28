@@ -20,6 +20,13 @@ layer has no ReLU (Eq. 3), and Min-Max scaling is fit on the full dataset
 before the split (Algorithm 1's step order). `--embedding_activation` and
 `--no_scale_before_split` opt into the non-literal alternative for each.
 
+`layer_norm` defaults to **True**: Figure 1 depicts each MLP block as
+"Dense+ReLU" followed by "LayerNorm", even though neither Eq. (2)/(3) nor
+the Section 3.2 text mention normalization. Since the figure most plausibly
+reflects what actually produced the paper's (much smoother) training
+curves, LayerNorm is applied by default; pass `--no_layer_norm` to follow
+the equations/text literally instead (no normalization).
+
 Best-checkpoint selection (`select_best_epoch`) defaults to **True** --
 lr=0.003 with no LR scheduler makes the final-epoch accuracy noisy/unstable
 run to run (see README.md), so by default this script reports the
@@ -86,6 +93,7 @@ def train_and_evaluate(
     categorical_cols=None,
     categorical_mode: str = "onehot",
     embedding_activation: bool = False,
+    layer_norm: bool = True,
     epochs: int = 100,
     batch_size: int = 128,
     lr: float = 3e-3,
@@ -161,6 +169,7 @@ def train_and_evaluate(
     model = LightweightMLP_IDS(
         input_dim=input_dim, num_classes=num_classes,
         embedding_activation=embedding_activation,
+        layer_norm=layer_norm,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
@@ -313,7 +322,7 @@ def train_and_evaluate(
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
-        "embedding_activation": embedding_activation,
+        "embedding_activation": embedding_activation, "layer_norm": layer_norm,
         "csv_path": csv_path, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
@@ -338,6 +347,13 @@ if __name__ == "__main__":
         "--embedding_activation", action="store_true",
         help="Apply ReLU on the embedding layer (Section 3.2 reading; default "
              "off follows Eq. 3's literal no-activation affine transform)",
+    )
+    parser.add_argument(
+        "--no_layer_norm", action="store_true",
+        help="Disable LayerNorm after each MLP block (default: enabled, "
+             "following Figure 1's 'Dense+ReLU -> LayerNorm' depiction, even "
+             "though Eq. 2/3 and the Section 3.2 text don't mention it). "
+             "Pass this flag to follow the equations/text literally instead.",
     )
     parser.add_argument("--name", default="dataset", help="Dataset name (for logging/plots)")
     parser.add_argument("--epochs", type=int, default=100)
@@ -376,6 +392,7 @@ if __name__ == "__main__":
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
         embedding_activation=args.embedding_activation,
+        layer_norm=not args.no_layer_norm,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
