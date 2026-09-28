@@ -135,15 +135,15 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
   낸 것인지 불명확 — Section 4.1에는 "80/20 split"만 언급되고 반복 실행
   여부는 명시되어 있지 않음. 본 재현은 기본적으로 단일 실행 기준.
 - `train.py`는 lr=0.003이 이 모델/데이터 규모엔 다소 높아 학습 곡선이
-  진동하는 경향이 있음. **기본값은 Section 4.1이 실제로 서술한 그대로
-  "100 epoch 학습 후 그 시점 가중치로 평가"** — best-checkpoint 선택
-  과정은 논문에 전혀 언급되지 않으므로 기본으로 켜지 않음
-  (`select_best_epoch=False`). 학습 곡선이 출렁여 마지막 epoch 값이
-  우연에 좌우되는 게 걱정되면 `--select_best_epoch`(+ `--val_size`)로
-  train을 다시 train/validation으로 나누고 validation accuracy가 가장
-  높았던 epoch의 가중치를 최종 평가에 쓰도록 켤 수 있음(test set은
-  선택에 관여하지 않아 낙관 편향은 없지만, 논문에 없는 절차라는 점은
-  동일).
+  진동하는 경향이 있음 — 같은 설정으로 재실행해도 마지막 epoch 정확도가
+  실행마다 크게 달라짐(실측: 84~95%대로 요동). **기본값을
+  `select_best_epoch=True`로 둠**: train을 다시 train/validation으로
+  나누고, validation accuracy가 가장 높았던 epoch의 가중치를 최종
+  평가에 씀(`--val_size`로 비율 조절). test set은 선택에 전혀 관여하지
+  않으므로 낙관 편향(data leakage)은 없음 — 다만 이 checkpoint-선택
+  절차 자체가 논문 Section 4.1에는 없는 내용이라는 점은 유의. Section
+  4.1을 문자 그대로 재현하려면(마지막 100번째 epoch 가중치 그대로 평가)
+  `--no_select_best_epoch`을 사용.
 - CICIoT2023의 실제 클래스 개수(34-class 원본 vs 다른 CICIoT2023
   논문들이 흔히 쓰는 8-class 카테고리)는 본 논문에 전혀 언급되어 있지
   않음 — 34-class 그대로 쓰면 클래스 불균형으로 소수 클래스 recall이
