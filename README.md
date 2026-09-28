@@ -132,9 +132,11 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
 
 - `model.py`: 논문 Eq. (3)은 활성화 함수 없는 순수 affine 변환으로
   embedding을 정의하지만, 3.2절 본문은 "hidden layers"(복수형)에 ReLU를
-  적용한다고 서술 — **기본값은 Eq. (3) 문자 그대로(ReLU 없음,
-  `embedding_activation=False`)**. `train.py --embedding_activation`으로
-  3.2절 해석(ReLU 있음)을 켤 수 있음.
+  적용한다고 서술 — **2026-09-28 교신저자 Jehad Ali 교수님이 이메일로
+  직접 확인**: "두 hidden layer(128, 64) 다 ReLU를 씀". 더 이상
+  ambiguity가 아니라 확정된 사실 — **기본값을
+  `embedding_activation=True`로 변경**. Eq. (3) 문자 그대로(ReLU 없음)
+  재현하려면 `train.py --no_embedding_activation`.
 - `model.py`: Figure 1은 두 MLP block을 각각 "Dense+ReLU → LayerNorm"으로
   그려놨는데, Eq. (2)/(3)이나 본문 어디에도 LayerNorm 언급이 없음 —
   그림에만 존재하는 요소. Figure 1이 실제 구현을 더 정확히 반영했을
@@ -172,8 +174,14 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
   판단해서 데이터셋 공식 8-class를 기본값으로 썼었으나, **논문 본문
   Section 4.1.3과 Table 6을 직접 확인한 결과 "Benign, DDoS, DoS, MITM,
   Mirai, Recon" 6-class로 명시되어 있었음** — 이 항목은 더 이상
-  ambiguity가 아니라 논문에 명시된 사실. **기본값을 6-class로 변경함**
-  (`remap_ciciot2023_labels.py`, 3절 참고). 다만 "MITM"이 원본 34-class
-  중 정확히 어떤 서브타입(`MITM-ArpSpoofing`만인지 `DNS_Spoofing`까지
-  포함인지)을 가리키는지는 여전히 논문에 없어 둘 다 합쳐서 매핑 중 —
-  이 부분만 남은 ambiguity.
+  ambiguity가 아니라 논문에 명시된 사실. **2026-09-28 교신저자 Jehad Ali
+  교수님이 이메일로도 직접 재확인**("The reported 98.45% accuracy on
+  CICIoT2023 corresponds to the six-class setting"). **기본값을
+  6-class로 변경함** (`remap_ciciot2023_labels.py`, 3절 참고). 다만
+  "MITM"이 원본 34-class 중 정확히 어떤 서브타입(`MITM-ArpSpoofing`만인지
+  `DNS_Spoofing`까지 포함인지)을 가리키는지는 여전히 논문/답장 둘 다에
+  없어 둘 다 합쳐서 매핑 중 — 이 부분만 남은 ambiguity.
+- 34-class로 확장 실험을 할 경우, 저자 권고: imbalance-handling 기법을
+  적용하고 accuracy 외에 macro-averaged precision/recall/F1도 함께
+  보고할 것 (2026-09-28 이메일 답변). 아직 코드에 반영되지 않은 향후
+  과제.
