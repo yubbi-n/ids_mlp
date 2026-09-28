@@ -256,6 +256,21 @@ def train_and_evaluate(
     except ValueError:
         auc = float("nan")
 
+    # Per-class breakdown (Table 4-6 style): the overall weighted metrics
+    # above can look fine while a specific class (e.g. DDoS) is doing
+    # poorly, so report each class's own precision/recall/F1 too.
+    class_prec, class_rec, class_f1, class_support = precision_recall_fscore_support(
+        y_true, preds, average=None, labels=range(num_classes), zero_division=0
+    )
+    per_class_df = pd.DataFrame({
+        "class": le.classes_,
+        "precision": class_prec,
+        "recall": class_rec,
+        "f1": class_f1,
+        "support": class_support,
+    })
+    per_class_df.to_csv(f"{output_dir}/{dataset_name}_per_class_metrics.csv", index=False)
+
     n_params = count_params(model)
     flops, macs = estimate_flops(input_dim, 128, 64, num_classes)
     model_size_kb = n_params * 4 / 1024  # float32 assumption
@@ -265,6 +280,8 @@ def train_and_evaluate(
         f"Accuracy={acc:.4f} Precision={prec:.4f} Recall={rec:.4f} "
         f"F1={f1:.4f} AUC={auc:.4f}"
     )
+    print(f"\n--- {dataset_name} per-class metrics ---")
+    print(per_class_df.to_string(index=False, float_format=lambda v: f"{v:.4f}"))
     print(
         f"Params={n_params} FLOPs(approx)={flops} MACs(approx)={macs} "
         f"ModelSize={model_size_kb:.1f} KB TrainTime={train_time:.2f}s "
