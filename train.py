@@ -14,11 +14,15 @@ Usage:
         --categorical_cols protocol_type service flag \
         --name NSL-KDD
 
-Defaults follow the most literal reading of the paper for embedding
-activation and scaling order (see README.md's ambiguities list): embedding
-layer has no ReLU (Eq. 3), and Min-Max scaling is fit on the full dataset
-before the split (Algorithm 1's step order). `--embedding_activation` and
-`--no_scale_before_split` opt into the non-literal alternative for each.
+`embedding_activation` defaults to **True**: corresponding author Jehad Ali
+confirmed via email (2026-09-28) that both hidden layers (128 and 64) use
+ReLU, resolving the Eq. (3) vs. Section 3.2 text conflict in the text's
+favor. Pass `--no_embedding_activation` for Eq. (3)'s literal
+no-activation reading instead.
+
+Min-Max scaling defaults to being fit on the full dataset before the split
+(Algorithm 1's step order, per README.md's ambiguities list) --
+`--no_scale_before_split` opts into a train-only fit instead.
 
 `layer_norm` defaults to **True**: Figure 1 depicts each MLP block as
 "Dense+ReLU" followed by "LayerNorm", even though neither Eq. (2)/(3) nor
@@ -92,7 +96,7 @@ def train_and_evaluate(
     label_col: str,
     categorical_cols=None,
     categorical_mode: str = "onehot",
-    embedding_activation: bool = False,
+    embedding_activation: bool = True,
     layer_norm: bool = True,
     epochs: int = 100,
     batch_size: int = 128,
@@ -361,9 +365,11 @@ if __name__ == "__main__":
         help="How to handle categorical_cols: one-hot encode, or drop entirely",
     )
     parser.add_argument(
-        "--embedding_activation", action="store_true",
-        help="Apply ReLU on the embedding layer (Section 3.2 reading; default "
-             "off follows Eq. 3's literal no-activation affine transform)",
+        "--no_embedding_activation", action="store_true",
+        help="Disable ReLU on the embedding layer, following Eq. 3's literal "
+             "no-activation affine transform. Default (enabled) follows "
+             "corresponding author Jehad Ali's email confirmation "
+             "(2026-09-28) that both hidden layers use ReLU.",
     )
     parser.add_argument(
         "--no_layer_norm", action="store_true",
@@ -408,7 +414,7 @@ if __name__ == "__main__":
         label_col=args.label_col,
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
-        embedding_activation=args.embedding_activation,
+        embedding_activation=not args.no_embedding_activation,
         layer_norm=not args.no_layer_norm,
         epochs=args.epochs,
         batch_size=args.batch_size,
