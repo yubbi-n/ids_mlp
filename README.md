@@ -14,7 +14,7 @@ Intrusion Detection System in Internet of Things」(Chandroth & Ali,
 | `preprocess.py` | 논문 3.1절 전처리 파이프라인 (결측치/비유한값 제거 → 레이블 인코딩 → 원-핫 인코딩 → Min-Max 정규화) |
 | `train.py` | 논문 4절 학습/평가 (AdamW, lr=0.003, wd=1e-4, 100 epoch, batch 128, 80/20 split, Accuracy/Precision/Recall/F1/AUC, params/FLOPs/model size/시간 측정) |
 | `remap_nslkdd_labels.py` | NSL-KDD 원본 공격 레이블을 Normal/DoS/Probe/R2L/U2R 5-class로 매핑 |
-| `remap_ciciot2023_labels.py` | CICIoT2023 원본 34개 세부 레이블을 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/Web/BruteForce)로 매핑 — **CICIoT2023은 항상 이걸 거친 뒤 사용** (아래 3절 참고) |
+| `remap_ciciot2023_labels.py` | CICIoT2023 원본 34개 세부 레이블을 논문이 명시한 6-class(Benign/DDoS/DoS/MITM/Mirai/Recon, 기본값) 또는 데이터셋 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/Web/BruteForce, `--scheme 8class`)로 매핑 — **CICIoT2023은 항상 이걸 거친 뒤 사용** (아래 3절 참고) |
 | `sample_dataset.py` | 클래스당 최대 N개로 상한을 두는 메모리 절약형 샘플링 (전체 클래스 유지) |
 | `feature_selection.py` | 연구계획서 2.3절 Feature Selection: Random Forest 기반 importance + SHAP 기반 importance 산출, 두 방식 비교(Spearman correlation, Top-k overlap), Top-k feature subset CSV 생성 |
 
@@ -84,7 +84,7 @@ NSL-KDD를 사용하는 경우 `remap_nslkdd_labels.py`로 원본 공격 레이�
 5-class(Normal/DoS/Probe/R2L/U2R)로 변환한 뒤 `train.py --label_col`에
 매핑된 컬럼명을 지정하세요.
 
-### CICIoT2023은 항상 8-class로 매핑해서 사용 (34-class 금지)
+### CICIoT2023은 항상 6-class로 매핑해서 사용 (34-class 금지)
 
 CICIoT2023 원본은 BenignTraffic + 33개 세부 공격 레이블(34-class)입니다.
 **이 34개를 그대로 학습에 쓰지 않습니다** — `DDoS-SYN_Flood` vs
@@ -93,19 +93,36 @@ CICIoT2023 원본은 BenignTraffic + 33개 세부 공격 레이블(34-class)입�
 커서(수백 개~80만 개) 소수 클래스 recall이 0에 가깝게 무너지고 weighted
 accuracy가 크게 낮아집니다(실측: baseline 91%대, 반면 AUC는 0.99+로 모델
 자체의 판별력은 충분함 — 즉 세분화·불균형 문제이지 모델/코드 문제가
-아님). 원 논문도 CICIoT2023에서 몇 개 클래스를 썼는지 명시하지 않았고,
-대부분의 CICIoT2023 관련 논문은 공식 8-class(Benign + DDoS/DoS/Mirai/
-Recon/Spoofing/Web/BruteForce) 기준으로 성능을 보고합니다.
+아님).
 
-**따라서 CICIoT2023 관련 스크립트를 돌리기 전, 항상 먼저 8-class로 변환하세요:**
+처음에는 원 논문이 CICIoT2023에서 몇 개 클래스를 썼는지 안 밝혔다고
+판단해서 데이터셋 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/
+Web/BruteForce)를 기본값으로 썼었는데, **논문 본문(Section 4.1.3)과
+Table 6을 직접 확인해보니 실제로는 6-class(Benign, DDoS, DoS, MITM,
+Mirai, Recon)라고 명시되어 있었습니다.** 8-class 대비 Web·BruteForce
+(샘플 수가 가장 적고 오분류되기 쉬운 두 클래스)가 빠지고, Spoofing이
+"MITM"이라는 이름으로 통합되어 있습니다. **따라서 기본값을 6-class로
+변경했습니다.** (다만 "MITM"이 원본 34-class 중 `MITM-ArpSpoofing`만
+포함하는지 `DNS_Spoofing`까지 포함하는지는 논문에 명시되어 있지 않아,
+현재는 둘 다 합쳐서 매핑 — 저자 확인이 필요한 부분.)
+
+**CICIoT2023 관련 스크립트를 돌리기 전, 항상 먼저 6-class로 변환하세요:**
 
 ```bash
 python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
-    --out data/CICIOT23/train/train_8class.csv --label_col label
+    --out data/CICIOT23/train/train_6class.csv --label_col label
+```
+
+데이터셋 공식 8-class와 비교해보고 싶다면 `--scheme 8class`를 추가하세요:
+
+```bash
+python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
+    --out data/CICIOT23/train/train_8class.csv --label_col label --scheme 8class
 ```
 
 그 다음 `train.py`/`feature_selection.py`/`sample_dataset.py`에는 원본
-`train.csv`가 아니라 이 `train_8class.csv`를 `--csv`로 넘기세요.
+`train.csv`가 아니라 이 `train_6class.csv`(또는 `train_8class.csv`)를
+`--csv`로 넘기세요.
 
 ## 재현상 확인이 필요한 사항 (ambiguities)
 
@@ -118,6 +135,13 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
   적용한다고 서술 — **기본값은 Eq. (3) 문자 그대로(ReLU 없음,
   `embedding_activation=False`)**. `train.py --embedding_activation`으로
   3.2절 해석(ReLU 있음)을 켤 수 있음.
+- `model.py`: Figure 1은 두 MLP block을 각각 "Dense+ReLU → LayerNorm"으로
+  그려놨는데, Eq. (2)/(3)이나 본문 어디에도 LayerNorm 언급이 없음 —
+  그림에만 존재하는 요소. Figure 1이 실제 구현을 더 정확히 반영했을
+  가능성이 높다고 보고(lr=0.003 + scheduler 없음인데도 논문의 학습
+  곡선이 저희 재현보다 훨씬 안정적인 것과도 부합) **기본값을
+  `layer_norm=True`로 둠**. 수식/본문을 문자 그대로 따르려면
+  `train.py --no_layer_norm`.
 - `preprocess.py`/`train.py`: Min-Max 정규화를 train/test split 이전
   (Algorithm 1 순서)에 전체 데이터에 fit할지, split 이후 train에만
   fit할지 논문상 불명확 — **기본값은 Algorithm 1 순서 그대로 전체
@@ -135,20 +159,21 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
   낸 것인지 불명확 — Section 4.1에는 "80/20 split"만 언급되고 반복 실행
   여부는 명시되어 있지 않음. 본 재현은 기본적으로 단일 실행 기준.
 - `train.py`는 lr=0.003이 이 모델/데이터 규모엔 다소 높아 학습 곡선이
-  진동하는 경향이 있음. **기본값은 Section 4.1이 실제로 서술한 그대로
-  "100 epoch 학습 후 그 시점 가중치로 평가"** — best-checkpoint 선택
-  과정은 논문에 전혀 언급되지 않으므로 기본으로 켜지 않음
-  (`select_best_epoch=False`). 학습 곡선이 출렁여 마지막 epoch 값이
-  우연에 좌우되는 게 걱정되면 `--select_best_epoch`(+ `--val_size`)로
-  train을 다시 train/validation으로 나누고 validation accuracy가 가장
-  높았던 epoch의 가중치를 최종 평가에 쓰도록 켤 수 있음(test set은
-  선택에 관여하지 않아 낙관 편향은 없지만, 논문에 없는 절차라는 점은
-  동일).
-- CICIoT2023의 실제 클래스 개수(34-class 원본 vs 다른 CICIoT2023
-  논문들이 흔히 쓰는 8-class 카테고리)는 본 논문에 전혀 언급되어 있지
-  않음 — 34-class 그대로 쓰면 클래스 불균형으로 소수 클래스 recall이
-  0에 가까워지는 문제가 실측 확인되어(baseline accuracy 91%대, AUC는
-  0.99+로 모델 판별력 자체는 정상), **기본값을 8-class로 정함**
-  (`remap_ciciot2023_labels.py`, 3절 참고). "논문 미기재 항목"이라는
-  점에서 34-class와 8-class 둘 다 확인되지 않은 추정이지만, 8-class가
-  실용적으로 더 합리적인 기본값이라 판단.
+  진동하는 경향이 있음 — 같은 설정으로 재실행해도 마지막 epoch 정확도가
+  실행마다 크게 달라짐(실측: 84~95%대로 요동). **기본값을
+  `select_best_epoch=True`로 둠**: train을 다시 train/validation으로
+  나누고, validation accuracy가 가장 높았던 epoch의 가중치를 최종
+  평가에 씀(`--val_size`로 비율 조절). test set은 선택에 전혀 관여하지
+  않으므로 낙관 편향(data leakage)은 없음 — 다만 이 checkpoint-선택
+  절차 자체가 논문 Section 4.1에는 없는 내용이라는 점은 유의. Section
+  4.1을 문자 그대로 재현하려면(마지막 100번째 epoch 가중치 그대로 평가)
+  `--no_select_best_epoch`을 사용.
+- CICIoT2023의 실제 클래스 개수: 처음에는 논문에 전혀 언급이 없다고
+  판단해서 데이터셋 공식 8-class를 기본값으로 썼었으나, **논문 본문
+  Section 4.1.3과 Table 6을 직접 확인한 결과 "Benign, DDoS, DoS, MITM,
+  Mirai, Recon" 6-class로 명시되어 있었음** — 이 항목은 더 이상
+  ambiguity가 아니라 논문에 명시된 사실. **기본값을 6-class로 변경함**
+  (`remap_ciciot2023_labels.py`, 3절 참고). 다만 "MITM"이 원본 34-class
+  중 정확히 어떤 서브타입(`MITM-ArpSpoofing`만인지 `DNS_Spoofing`까지
+  포함인지)을 가리키는지는 여전히 논문에 없어 둘 다 합쳐서 매핑 중 —
+  이 부분만 남은 ambiguity.

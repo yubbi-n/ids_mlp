@@ -14,14 +14,27 @@ Usage:
         --categorical_cols protocol_type service flag \
         --name NSL-KDD
 
-Defaults follow the most literal reading of the paper (see README.md's
-ambiguities list for the reasoning behind each): embedding layer has no
-ReLU (Eq. 3), Min-Max scaling is fit on the full dataset before the split
-(Algorithm 1's step order), and the reported metrics are the literal final
-epoch's -- no best-checkpoint selection (never described in the paper).
-`--embedding_activation`, `--no_scale_before_split`, and
-`--select_best_epoch` opt into the non-literal alternative for each,
-respectively.
+Defaults follow the most literal reading of the paper for embedding
+activation and scaling order (see README.md's ambiguities list): embedding
+layer has no ReLU (Eq. 3), and Min-Max scaling is fit on the full dataset
+before the split (Algorithm 1's step order). `--embedding_activation` and
+`--no_scale_before_split` opt into the non-literal alternative for each.
+
+`layer_norm` defaults to **True**: Figure 1 depicts each MLP block as
+"Dense+ReLU" followed by "LayerNorm", even though neither Eq. (2)/(3) nor
+the Section 3.2 text mention normalization. Since the figure most plausibly
+reflects what actually produced the paper's (much smoother) training
+curves, LayerNorm is applied by default; pass `--no_layer_norm` to follow
+the equations/text literally instead (no normalization).
+
+Best-checkpoint selection (`select_best_epoch`) defaults to **True** --
+lr=0.003 with no LR scheduler makes the final-epoch accuracy noisy/unstable
+run to run (see README.md), so by default this script reports the
+validation-selected best checkpoint instead of whatever the final epoch
+happens to land on. This is not literal to Section 4.1 (which never
+describes a checkpoint-selection step), and it never looks at the test set
+to make the choice, so there is no test-set leakage. Pass
+`--no_select_best_epoch` to fall back to the literal final-epoch reading.
 
 NOTE (ambiguity to confirm with authors -- see README.md for the full list):
   - Exact FLOPs/MACs counting convention used to get their reported numbers
@@ -80,13 +93,14 @@ def train_and_evaluate(
     categorical_cols=None,
     categorical_mode: str = "onehot",
     embedding_activation: bool = False,
+    layer_norm: bool = True,
     epochs: int = 100,
     batch_size: int = 128,
     lr: float = 3e-3,
     weight_decay: float = 1e-4,
     test_size: float = 0.2,
     val_size: float = 0.1,
-    select_best_epoch: bool = False,
+    select_best_epoch: bool = True,
     scale_before_split: bool = True,
     seed: int = 42,
     dataset_name: str = "dataset",
@@ -99,20 +113,15 @@ def train_and_evaluate(
         df, label_col, categorical_cols, categorical_mode=categorical_mode
     )
 
-    # `select_best_epoch=False` (default) is the literal reading of the
-    # paper (Section 4.1): a plain 80/20 train/test split, the model
-    # evaluated on test after each epoch purely for monitoring, and the
-    # FINAL reported metrics computed on whatever weights training happens
-    # to end on after all `epochs` -- no "pick the best epoch" step, since
-    # the paper never describes one.
-    #
-    # `select_best_epoch=True` is an explicit opt-in deviation: it carves a
-    # validation split out of train (`val_size`, a fraction of the full
-    # dataset) used only to choose the best-epoch checkpoint, and reports
-    # that checkpoint's test-set metrics instead of the final epoch's. This
-    # avoids the final-epoch number being an arbitrary point on a noisy,
-    # unscheduled-LR loss curve, at the cost of no longer being a literal
-    # reproduction of Section 4.1. Off by default for that reason.
+    # `select_best_epoch=True` (default) carves a validation split out of
+    # train (`val_size`, a fraction of the full dataset) used only to choose
+    # the best-epoch checkpoint, and reports that checkpoint's test-set
+    # metrics instead of the final epoch's. This avoids the final-epoch
+    # number being an arbitrary point on a noisy, unscheduled-LR loss curve.
+    # It never looks at the test set to make the choice, so there is no
+    # test-set leakage -- but it is not literal to Section 4.1, which never
+    # describes a checkpoint-selection step. Pass `--no_select_best_epoch`
+    # to fall back to the literal final-epoch reading.
     X_all = X_df.values.astype(np.float32)
 
     # `scale_before_split=True` matches the paper's Algorithm 1 step order
@@ -160,6 +169,7 @@ def train_and_evaluate(
     model = LightweightMLP_IDS(
         input_dim=input_dim, num_classes=num_classes,
         embedding_activation=embedding_activation,
+        layer_norm=layer_norm,
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
@@ -225,7 +235,7 @@ def train_and_evaluate(
               f"(val_acc={best_val_acc:.4f}) for final evaluation")
     else:
         print(f"[{dataset_name}] using final epoch {epochs}/{epochs} for final evaluation "
-              f"(literal reproduction; pass --select_best_epoch to opt into best-checkpoint selection)")
+              f"(literal reproduction; remove --no_select_best_epoch to use best-checkpoint selection)")
 
     # ---- final evaluation ----
     model.eval()
@@ -312,7 +322,7 @@ def train_and_evaluate(
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
-        "embedding_activation": embedding_activation,
+        "embedding_activation": embedding_activation, "layer_norm": layer_norm,
         "csv_path": csv_path, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
@@ -338,24 +348,33 @@ if __name__ == "__main__":
         help="Apply ReLU on the embedding layer (Section 3.2 reading; default "
              "off follows Eq. 3's literal no-activation affine transform)",
     )
+    parser.add_argument(
+        "--no_layer_norm", action="store_true",
+        help="Disable LayerNorm after each MLP block (default: enabled, "
+             "following Figure 1's 'Dense+ReLU -> LayerNorm' depiction, even "
+             "though Eq. 2/3 and the Section 3.2 text don't mention it). "
+             "Pass this flag to follow the equations/text literally instead.",
+    )
     parser.add_argument("--name", default="dataset", help="Dataset name (for logging/plots)")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-3)
     parser.add_argument("--weight_decay", type=float, default=1e-4)
     parser.add_argument(
-        "--select_best_epoch", action="store_true",
-        help="Carve a validation split out of train (--val_size) and report the "
-             "checkpoint with the best validation accuracy instead of the final "
-             "epoch. Off by default: the paper's Section 4.1 describes a plain "
-             "80/20 split evaluated after training for --epochs, with no "
-             "best-checkpoint step.",
+        "--no_select_best_epoch", action="store_true",
+        help="Report the literal final-epoch checkpoint instead of the "
+             "validation-selected best epoch (the default). The paper's "
+             "Section 4.1 describes a plain 80/20 split evaluated after "
+             "training for --epochs, with no best-checkpoint step -- pass "
+             "this flag for that literal reading. Default (best-epoch "
+             "selection) exists because lr=0.003 with no LR scheduler makes "
+             "the final-epoch accuracy noisy/unstable run to run.",
     )
     parser.add_argument(
         "--val_size", type=float, default=0.1,
         help="Fraction of the full dataset held out for best-epoch checkpoint "
-             "selection when --select_best_epoch is set (kept separate from "
-             "the test set). Ignored otherwise.",
+             "selection (kept separate from the test set). Ignored when "
+             "--no_select_best_epoch is set.",
     )
     parser.add_argument(
         "--no_scale_before_split", action="store_true",
@@ -373,12 +392,13 @@ if __name__ == "__main__":
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
         embedding_activation=args.embedding_activation,
+        layer_norm=not args.no_layer_norm,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
         val_size=args.val_size,
-        select_best_epoch=args.select_best_epoch,
+        select_best_epoch=not args.no_select_best_epoch,
         scale_before_split=not args.no_scale_before_split,
         dataset_name=args.name,
         output_dir=args.output_dir,
