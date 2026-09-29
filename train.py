@@ -112,6 +112,14 @@ def train_and_evaluate(
 ):
     os.makedirs(output_dir, exist_ok=True)
 
+    # `seed` previously only controlled the sklearn train/test/val splits --
+    # torch's own RNG (weight init, DataLoader shuffling order) was left
+    # unseeded, so "identical" runs could still land on meaningfully
+    # different results (observed: >10pp swings on minority classes like
+    # MITM between two runs with the same CLI args). Seed it too so a given
+    # `--seed` is fully reproducible end to end.
+    torch.manual_seed(seed)
+
     df = pd.read_csv(csv_path)
     X_df, y, le = preprocess_full_pipeline(
         df, label_col, categorical_cols, categorical_mode=categorical_mode
