@@ -170,6 +170,12 @@ python remap_ciciot2023_labels.py --in data/CICIOT23/train/train.csv \
   절차 자체가 논문 Section 4.1에는 없는 내용이라는 점은 유의. Section
   4.1을 문자 그대로 재현하려면(마지막 100번째 epoch 가중치 그대로 평가)
   `--no_select_best_epoch`을 사용.
+- **`--lr_scheduler` (기본값 False, 재현이 아니라 개선 실험용 opt-in)**:
+  위 출렁임 문제의 근본 원인(고정 lr=0.003)을 best-epoch 선택으로
+  우회하는 대신, cosine annealing으로 lr 자체를 100 epoch에 걸쳐
+  서서히 줄여서 진동을 줄일 수 있는지 시험하는 옵션. Table 3에 없는
+  내용이라 기본값은 꺼져 있고, baseline(`--lr_scheduler` 없음)과
+  개선 실험(`--lr_scheduler`)을 나란히 비교하는 용도.
 - CICIoT2023의 실제 클래스 개수: 처음에는 논문에 전혀 언급이 없다고
   판단해서 데이터셋 공식 8-class를 기본값으로 썼었으나, **논문 본문
   Section 4.1.3과 Table 6을 직접 확인한 결과 "Benign, DDoS, DoS, MITM,
