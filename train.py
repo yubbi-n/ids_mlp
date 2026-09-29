@@ -40,6 +40,11 @@ describes a checkpoint-selection step), and it never looks at the test set
 to make the choice, so there is no test-set leakage. Pass
 `--no_select_best_epoch` to fall back to the literal final-epoch reading.
 
+`lr_scheduler` defaults to **False** (Table 3's literal fixed lr=0.003 for
+all epochs). Pass `--lr_scheduler` to opt into cosine-annealing lr decay --
+this is an explicit EXPERIMENT to see whether it reduces the oscillation a
+fixed high lr causes, not a reproduction of anything in the paper.
+
 NOTE (ambiguity to confirm with authors -- see README.md for the full list):
   - Exact FLOPs/MACs counting convention used to get their reported numbers
     (e.g. 45,200 FLOPs / 22,600 MACs for CICIDS2017) is not stated. This
@@ -106,11 +111,20 @@ def train_and_evaluate(
     val_size: float = 0.1,
     select_best_epoch: bool = True,
     scale_before_split: bool = True,
+    lr_scheduler: bool = False,
     seed: int = 42,
     dataset_name: str = "dataset",
     output_dir: str = ".",
 ):
     os.makedirs(output_dir, exist_ok=True)
+
+    # `seed` previously only controlled the sklearn train/test/val splits --
+    # torch's own RNG (weight init, DataLoader shuffling order) was left
+    # unseeded, so "identical" runs could still land on meaningfully
+    # different results (observed: >10pp swings on minority classes like
+    # MITM between two runs with the same CLI args). Seed it too so a given
+    # `--seed` is fully reproducible end to end.
+    torch.manual_seed(seed)
 
     df = pd.read_csv(csv_path)
     X_df, y, le = preprocess_full_pipeline(
@@ -178,6 +192,17 @@ def train_and_evaluate(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     criterion = nn.CrossEntropyLoss()
 
+    # `lr_scheduler=False` (default) is the literal reading of Section 4.3 /
+    # Table 3: a single fixed lr=0.003 for all `epochs`. This is an explicit
+    # opt-in EXPERIMENT, not a reproduction, to test whether decaying lr
+    # reduces the oscillation caused by a fixed lr=0.003 with no schedule
+    # (see README.md). Cosine annealing is used since it needs no extra
+    # milestone/step hyperparameters beyond `epochs` itself.
+    scheduler = (
+        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+        if lr_scheduler else None
+    )
+
     train_acc_hist, val_acc_hist = [], []
     train_loss_hist, val_loss_hist = [], []
     best_val_acc = -1.0
@@ -202,6 +227,9 @@ def train_and_evaluate(
 
         train_loss = running_loss / total
         train_acc = correct / total
+
+        if scheduler is not None:
+            scheduler.step()
 
         model.eval()
         with torch.no_grad():
@@ -344,6 +372,7 @@ def train_and_evaluate(
         "train_time_s": train_time, "test_time_s": test_time,
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
         "embedding_activation": embedding_activation, "layer_norm": layer_norm,
+        "lr_scheduler": lr_scheduler,
         "csv_path": csv_path, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
@@ -377,6 +406,13 @@ if __name__ == "__main__":
              "following Figure 1's 'Dense+ReLU -> LayerNorm' depiction, even "
              "though Eq. 2/3 and the Section 3.2 text don't mention it). "
              "Pass this flag to follow the equations/text literally instead.",
+    )
+    parser.add_argument(
+        "--lr_scheduler", action="store_true",
+        help="EXPERIMENT, not reproduction: decay lr with cosine annealing "
+             "over --epochs, instead of Table 3's fixed lr=0.003 throughout. "
+             "Off by default -- opt in to test whether this reduces the "
+             "oscillation a fixed high lr causes (see README.md).",
     )
     parser.add_argument("--name", default="dataset", help="Dataset name (for logging/plots)")
     parser.add_argument("--epochs", type=int, default=100)
@@ -416,6 +452,7 @@ if __name__ == "__main__":
         categorical_mode=args.categorical_mode,
         embedding_activation=not args.no_embedding_activation,
         layer_norm=not args.no_layer_norm,
+        lr_scheduler=args.lr_scheduler,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
