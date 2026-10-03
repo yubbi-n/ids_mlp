@@ -15,6 +15,7 @@ Intrusion Detection System in Internet of Things」(Chandroth & Ali,
 | `train.py` | 논문 4절 학습/평가 (AdamW, lr=0.003, wd=1e-4, 100 epoch, batch 128, 80/20 split, Accuracy/Precision/Recall/F1/AUC, params/FLOPs/model size/시간 측정) |
 | `remap_nslkdd_labels.py` | NSL-KDD 원본 공격 레이블을 Normal/DoS/Probe/R2L/U2R 5-class로 매핑 |
 | `remap_ciciot2023_labels.py` | CICIoT2023 원본 34개 세부 레이블을 논문이 명시한 6-class(Benign/DDoS/DoS/MITM/Mirai/Recon, 기본값) 또는 데이터셋 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/Web/BruteForce, `--scheme 8class`)로 매핑 — **CICIoT2023은 항상 이걸 거친 뒤 사용** (아래 3절 참고) |
+| `filter_ciciot2023_binary.py` | 팀 연구계획서가 요구하는 Benign vs DDoS 이진분류용 데이터 생성 — 그 외 공격 유형(DoS/Mirai/MITM/Recon/Web/BruteForce) 행은 제거(다른 클래스로 합치지 않음) |
 | `sample_dataset.py` | 클래스당 최대 N개로 상한을 두는 메모리 절약형 샘플링 (전체 클래스 유지) |
 | `feature_selection.py` | 연구계획서 2.3절 Feature Selection: Random Forest 기반 importance + SHAP 기반 importance 산출, 두 방식 비교(Spearman correlation, Top-k overlap), Top-k feature subset CSV 생성 |
 | `summarize_results.py` | `results/` 아래 여러 `train.py` 실행 결과(`*_summary.json` + `*_per_class_metrics.csv`)를 accuracy 기준 정렬된 표 하나로 모아서 비교 (baseline vs Top-k 실험들을 한 번에 조회) |
