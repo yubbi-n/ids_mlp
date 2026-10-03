@@ -17,6 +17,7 @@ Intrusion Detection System in Internet of Things」(Chandroth & Ali,
 | `remap_ciciot2023_labels.py` | CICIoT2023 원본 34개 세부 레이블을 논문이 명시한 6-class(Benign/DDoS/DoS/MITM/Mirai/Recon, 기본값) 또는 데이터셋 공식 8-class(Benign + DDoS/DoS/Mirai/Recon/Spoofing/Web/BruteForce, `--scheme 8class`)로 매핑 — **CICIoT2023은 항상 이걸 거친 뒤 사용** (아래 3절 참고) |
 | `sample_dataset.py` | 클래스당 최대 N개로 상한을 두는 메모리 절약형 샘플링 (전체 클래스 유지) |
 | `feature_selection.py` | 연구계획서 2.3절 Feature Selection: Random Forest 기반 importance + SHAP 기반 importance 산출, 두 방식 비교(Spearman correlation, Top-k overlap), Top-k feature subset CSV 생성 |
+| `summarize_results.py` | `results/` 아래 여러 `train.py` 실행 결과(`*_summary.json` + `*_per_class_metrics.csv`)를 accuracy 기준 정렬된 표 하나로 모아서 비교 (baseline vs Top-k 실험들을 한 번에 조회) |
 
 ## 1. 가상환경 설정 (conda)
 
