@@ -7,7 +7,10 @@ Training / evaluation script matching Section 4 of the paper:
   - CrossEntropyLoss (Eq. 6)
   - Metrics: accuracy, precision, recall, F1, AUC-ROC (Section 4.4)
   - Computational complexity: param count, FLOPs/MACs (approx), model size,
-    train/test time (Section 4.6, Table 7)
+    train/test time (Section 4.6, Table 7), plus a CPU single-thread
+    inference latency benchmark (not in the paper -- added to compare
+    against the RF teammate's own CPU speed measurements and the research
+    plan's resource-constrained edge deployment question)
 
 Usage:
     python train.py --csv path/to/dataset.csv --label_col Label \
@@ -59,6 +62,7 @@ import argparse
 import copy
 import json
 import os
+import statistics
 import time
 
 import numpy as np
@@ -278,6 +282,26 @@ def train_and_evaluate(
         preds = logits.argmax(dim=1).cpu().numpy()
     test_time = time.time() - start_test
 
+    # ---- CPU single-thread inference speed ----
+    # The GPU test_time above is a single batched forward pass and isn't
+    # representative of a resource-constrained edge device. This mirrors the
+    # RF teammate's own benchmark methodology (same sample count, single
+    # thread, median of repeated runs) so the two are directly comparable --
+    # per their report: "같은 10만 샘플, n_jobs=1, 5회 중앙값".
+    cpu_bench_n = min(100_000, X_test_t.shape[0])
+    X_bench = X_test_t[:cpu_bench_n].detach().cpu()
+    cpu_model = copy.deepcopy(model).cpu().eval()
+    prev_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    bench_times = []
+    with torch.no_grad():
+        for _ in range(5):
+            start_bench = time.perf_counter()
+            cpu_model(X_bench)
+            bench_times.append(time.perf_counter() - start_bench)
+    torch.set_num_threads(prev_threads)
+    cpu_latency_us_per_sample = (statistics.median(bench_times) / cpu_bench_n) * 1e6
+
     y_true = y_test_t.cpu().numpy()
     acc = accuracy_score(y_true, preds)
     prec, rec, f1, _ = precision_recall_fscore_support(
@@ -317,7 +341,9 @@ def train_and_evaluate(
     print(
         f"Params={n_params} FLOPs(approx)={flops} MACs(approx)={macs} "
         f"ModelSize={model_size_kb:.1f} KB TrainTime={train_time:.2f}s "
-        f"TestTime={test_time:.3f}s"
+        f"TestTime={test_time:.3f}s "
+        f"CPU(1-thread)={cpu_latency_us_per_sample:.2f} us/sample "
+        f"(n={cpu_bench_n}, median of 5 runs)"
     )
 
     # ---- plots (accuracy/loss curves, confusion matrix -- Figures 2-4) ----
@@ -370,6 +396,8 @@ def train_and_evaluate(
         "params": n_params, "flops": flops, "macs": macs,
         "model_size_kb": model_size_kb,
         "train_time_s": train_time, "test_time_s": test_time,
+        "cpu_latency_us_per_sample": cpu_latency_us_per_sample,
+        "cpu_benchmark_n_samples": cpu_bench_n,
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
         "embedding_activation": embedding_activation, "layer_norm": layer_norm,
         "lr_scheduler": lr_scheduler,

@@ -37,6 +37,7 @@ def summarize(results_dir: str, highlight_classes=None) -> pd.DataFrame:
             "params": s.get("params"),
             "best_epoch": s.get("best_epoch"),
             "lr_scheduler": s.get("lr_scheduler"),
+            "cpu_us_per_sample": s.get("cpu_latency_us_per_sample"),
         }
 
         per_class_path = os.path.join(results_dir, f"{name}_per_class_metrics.csv")
