@@ -1,10 +1,11 @@
 from __future__ import annotations
 """
 Aggregate every <name>_summary.json (and matching <name>_per_class_metrics.csv)
-in a results directory into one comparison table, sorted by accuracy --
+under a results directory into one comparison table, sorted by accuracy --
 so a batch of train.py runs (e.g. baseline + rf_top{5,10,15,20} +
 shap_top{5,10,15,20}) can be compared at a glance instead of opening each
-JSON individually.
+JSON individually. Searches recursively, so results organized into
+<dataset>/<scope>/<method>/ subfolders are all picked up in one pass.
 
 Usage:
     python summarize_results.py --results_dir results
@@ -22,13 +23,15 @@ import pandas as pd
 
 def summarize(results_dir: str, highlight_classes=None) -> pd.DataFrame:
     rows = []
-    for path in sorted(glob.glob(os.path.join(results_dir, "*_summary.json"))):
+    pattern = os.path.join(results_dir, "**", "*_summary.json")
+    for path in sorted(glob.glob(pattern, recursive=True)):
         name = os.path.basename(path)[: -len("_summary.json")]
         with open(path) as f:
             s = json.load(f)
 
         row = {
             "name": name,
+            "group": os.path.relpath(os.path.dirname(path), results_dir) or ".",
             "accuracy": s.get("accuracy"),
             "precision": s.get("precision"),
             "recall": s.get("recall"),
@@ -40,7 +43,9 @@ def summarize(results_dir: str, highlight_classes=None) -> pd.DataFrame:
             "cpu_us_per_sample": s.get("cpu_latency_us_per_sample"),
         }
 
-        per_class_path = os.path.join(results_dir, f"{name}_per_class_metrics.csv")
+        # per-class CSV lives alongside its summary.json, not necessarily at
+        # results_dir's root (results may be nested into dataset/scope/method/).
+        per_class_path = os.path.join(os.path.dirname(path), f"{name}_per_class_metrics.csv")
         if highlight_classes and os.path.exists(per_class_path):
             pc = pd.read_csv(per_class_path).set_index("class")
             for cls in highlight_classes:
