@@ -172,13 +172,21 @@ def run(train_csv, train_label_col, test_csv, test_label_col, name, output_dir,
     start_train = time.time()
     model.train()
     for epoch in range(epochs):
+        epoch_loss, epoch_correct, epoch_n = 0.0, 0, 0
         for xb, yb in loader:
             optimizer.zero_grad()
-            loss = criterion(model(xb), yb)
+            logits = model(xb)
+            loss = criterion(logits, yb)
             loss.backward()
             optimizer.step()
+            epoch_loss += loss.item() * xb.size(0)
+            epoch_correct += (logits.argmax(dim=1) == yb).sum().item()
+            epoch_n += xb.size(0)
         if scheduler is not None:
             scheduler.step()
+        if epoch == 0 or (epoch + 1) % 10 == 0 or epoch == epochs - 1:
+            print(f"[{name}] epoch {epoch+1}/{epochs} "
+                  f"train_loss={epoch_loss/epoch_n:.4f} train_acc={epoch_correct/epoch_n:.4f}")
     train_time = time.time() - start_train
 
     held_out_metrics, held_out_per_class = evaluate(model, device, le, X_te, y_te)
