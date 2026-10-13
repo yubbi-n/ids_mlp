@@ -82,7 +82,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from model import LightweightMLP_IDS
-from preprocess import preprocess_full_pipeline
+from preprocess import clean_dataframe, drop_categorical, encode_labels, one_hot_encode, preprocess_full_pipeline
 
 
 def count_params(model: nn.Module) -> int:
@@ -119,6 +119,7 @@ def train_and_evaluate(
     seed: int = 42,
     dataset_name: str = "dataset",
     output_dir: str = ".",
+    test_csv: str | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -130,47 +131,98 @@ def train_and_evaluate(
     # `--seed` is fully reproducible end to end.
     torch.manual_seed(seed)
 
-    df = pd.read_csv(csv_path)
-    X_df, y, le = preprocess_full_pipeline(
-        df, label_col, categorical_cols, categorical_mode=categorical_mode
-    )
-
-    # `select_best_epoch=True` (default) carves a validation split out of
-    # train (`val_size`, a fraction of the full dataset) used only to choose
-    # the best-epoch checkpoint, and reports that checkpoint's test-set
-    # metrics instead of the final epoch's. This avoids the final-epoch
-    # number being an arbitrary point on a noisy, unscheduled-LR loss curve.
-    # It never looks at the test set to make the choice, so there is no
-    # test-set leakage -- but it is not literal to Section 4.1, which never
-    # describes a checkpoint-selection step. Pass `--no_select_best_epoch`
-    # to fall back to the literal final-epoch reading.
-    X_all = X_df.values.astype(np.float32)
-
-    # `scale_before_split=True` matches the paper's Algorithm 1 step order
-    # (Section 3.1): Min-Max normalization applied to the full (X, Y)
-    # dataset before the Section 4.1 split. Default (False) fits the scaler
-    # on the train split only instead, so no test-set information leaks
-    # into the transform -- also defensible, but not the literal order.
-    if scale_before_split:
-        X_all = MinMaxScaler().fit_transform(X_all)
-
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X_all, y, test_size=test_size, random_state=seed, stratify=y,
-    )
-    if select_best_epoch and val_size > 0:
-        val_frac_of_temp = val_size / (1 - test_size)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_temp, y_temp, test_size=val_frac_of_temp, random_state=seed, stratify=y_temp,
+    if test_csv is not None:
+        # Externally pre-split dataset (e.g. a time-ordered per-file split
+        # done upstream, such as prepare_pcap_dataset.py's teammate-matching
+        # methodology) -- the train/test partition is fixed before this
+        # function ever sees the data, so `test_size`/`scale_before_split`
+        # don't apply here. Cleaning happens on each file separately (before
+        # concatenation) so the train/test boundary survives row drops.
+        df_train_raw = clean_dataframe(pd.read_csv(csv_path))
+        df_test_raw = clean_dataframe(pd.read_csv(test_csv))
+        is_test_mask = np.concatenate([
+            np.zeros(len(df_train_raw), dtype=bool),
+            np.ones(len(df_test_raw), dtype=bool),
+        ])
+        df_all = pd.concat([df_train_raw, df_test_raw], ignore_index=True)
+        y_raw = df_all[label_col].values
+        X_df = df_all.drop(columns=[label_col])
+        y, le = encode_labels(y_raw)
+        cat_cols = categorical_cols or []
+        X_df = (
+            one_hot_encode(X_df, cat_cols) if categorical_mode == "onehot"
+            else drop_categorical(X_df, cat_cols)
         )
-    else:
-        X_train, y_train = X_temp, y_temp
-        X_val, y_val = X_test, y_test  # monitoring only -- see select_best_epoch above
+        non_numeric = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
+        if non_numeric:
+            raise ValueError(
+                f"Non-numeric columns remain after encoding: {non_numeric}. "
+                f"Add them to `categorical_cols` or drop them explicitly."
+            )
 
-    if not scale_before_split:
+        X_all = X_df.values.astype(np.float32)
+        X_train_full, y_train_full = X_all[~is_test_mask], y[~is_test_mask]
+        X_test, y_test = X_all[is_test_mask], y[is_test_mask]
+
+        if select_best_epoch and val_size > 0:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_train_full, y_train_full, test_size=val_size, random_state=seed,
+                stratify=y_train_full,
+            )
+        else:
+            X_train, y_train = X_train_full, y_train_full
+            X_val, y_val = X_test, y_test  # monitoring only -- see select_best_epoch above
+
+        # Scaling is always fit on the train partition only here: the two
+        # files were loaded separately, so there's no single "full dataset"
+        # to jointly scale before splitting the way scale_before_split means
+        # for the single-csv path below.
         scaler = MinMaxScaler()
         X_train = scaler.fit_transform(X_train)
         X_val = scaler.transform(X_val)
         X_test = scaler.transform(X_test)
+    else:
+        df = pd.read_csv(csv_path)
+        X_df, y, le = preprocess_full_pipeline(
+            df, label_col, categorical_cols, categorical_mode=categorical_mode
+        )
+
+        # `select_best_epoch=True` (default) carves a validation split out of
+        # train (`val_size`, a fraction of the full dataset) used only to choose
+        # the best-epoch checkpoint, and reports that checkpoint's test-set
+        # metrics instead of the final epoch's. This avoids the final-epoch
+        # number being an arbitrary point on a noisy, unscheduled-LR loss curve.
+        # It never looks at the test set to make the choice, so there is no
+        # test-set leakage -- but it is not literal to Section 4.1, which never
+        # describes a checkpoint-selection step. Pass `--no_select_best_epoch`
+        # to fall back to the literal final-epoch reading.
+        X_all = X_df.values.astype(np.float32)
+
+        # `scale_before_split=True` matches the paper's Algorithm 1 step order
+        # (Section 3.1): Min-Max normalization applied to the full (X, Y)
+        # dataset before the Section 4.1 split. Default (False) fits the scaler
+        # on the train split only instead, so no test-set information leaks
+        # into the transform -- also defensible, but not the literal order.
+        if scale_before_split:
+            X_all = MinMaxScaler().fit_transform(X_all)
+
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X_all, y, test_size=test_size, random_state=seed, stratify=y,
+        )
+        if select_best_epoch and val_size > 0:
+            val_frac_of_temp = val_size / (1 - test_size)
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_temp, y_temp, test_size=val_frac_of_temp, random_state=seed, stratify=y_temp,
+            )
+        else:
+            X_train, y_train = X_temp, y_temp
+            X_val, y_val = X_test, y_test  # monitoring only -- see select_best_epoch above
+
+        if not scale_before_split:
+            scaler = MinMaxScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_val = scaler.transform(X_val)
+            X_test = scaler.transform(X_test)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -401,7 +453,7 @@ def train_and_evaluate(
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
         "embedding_activation": embedding_activation, "layer_norm": layer_norm,
         "lr_scheduler": lr_scheduler,
-        "csv_path": csv_path, "dataset_name": dataset_name,
+        "csv_path": csv_path, "test_csv": test_csv, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
@@ -471,10 +523,20 @@ if __name__ == "__main__":
              "into the scaler but is not what Algorithm 1 literally shows.",
     )
     parser.add_argument("--output_dir", default=".")
+    parser.add_argument(
+        "--test_csv", default=None,
+        help="Path to a separately-prepared test CSV (e.g. from "
+             "prepare_pcap_dataset.py's per-file time-ordered split). When "
+             "given, --csv is treated as the pre-split TRAIN file, the "
+             "internal train/test split and --no_scale_before_split are "
+             "both bypassed (scaling is always fit on train only), and only "
+             "--val_size still carves a validation split out of --csv.",
+    )
     args = parser.parse_args()
 
     train_and_evaluate(
         csv_path=args.csv,
+        test_csv=args.test_csv,
         label_col=args.label_col,
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
