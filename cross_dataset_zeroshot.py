@@ -101,7 +101,14 @@ def build_common_df(csv_path: str, label_col: str, source_idx: int) -> tuple[pd.
         out[common_name] = df[cols].sum(axis=1)
     X = pd.DataFrame(out)
 
-    finite_mask = np.isfinite(X).all(axis=1)
+    # All 21 common features are semantically non-negative (durations, flag
+    # counts, rates, byte/packet totals, length stats, IAT, variance) --
+    # CICIDS2017 is documented to contain corrupted negative/inf values in
+    # its rate columns (Flow Bytes/s, Flow Packets/s), a known CICFlowMeter
+    # bug (division-by-zero / out-of-order packets on malformed flows), so
+    # drop any row with a negative or non-finite value in ANY common feature
+    # from EITHER dataset rather than just filtering non-finite values.
+    finite_mask = np.isfinite(X).all(axis=1) & (X >= 0).all(axis=1)
     X = X.loc[finite_mask].reset_index(drop=True)
     y_raw = df.loc[finite_mask, label_col].reset_index(drop=True)
     return X, y_raw
