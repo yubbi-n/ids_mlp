@@ -54,7 +54,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 from tqdm import tqdm
 
-from preprocess import preprocess_full_pipeline
+from preprocess import clean_dataframe, drop_categorical, encode_labels, one_hot_encode, preprocess_full_pipeline
 
 
 def rf_importance(X_train: np.ndarray, y_train: np.ndarray, seed: int,
@@ -229,6 +229,38 @@ def write_selected_csv(X_df: pd.DataFrame, y: np.ndarray, le, selected_cols: lis
     df_out.to_csv(out_path, index=False)
 
 
+def _load_presplit(csv_path: str, test_csv: str, label_col: str,
+                    categorical_cols, categorical_mode: str):
+    """
+    Mirrors train.py's --test_csv loading: clean each file separately (so
+    the train/test boundary survives row drops), then encode together so
+    both share the same label classes / one-hot columns. Returns
+    (X_df, y, le, is_test_mask) covering both files, train rows first.
+    """
+    df_train_raw = clean_dataframe(pd.read_csv(csv_path))
+    df_test_raw = clean_dataframe(pd.read_csv(test_csv))
+    is_test_mask = np.concatenate([
+        np.zeros(len(df_train_raw), dtype=bool),
+        np.ones(len(df_test_raw), dtype=bool),
+    ])
+    df_all = pd.concat([df_train_raw, df_test_raw], ignore_index=True)
+    y_raw = df_all[label_col].values
+    X_df = df_all.drop(columns=[label_col])
+    y, le = encode_labels(y_raw)
+    cat_cols = categorical_cols or []
+    X_df = (
+        one_hot_encode(X_df, cat_cols) if categorical_mode == "onehot"
+        else drop_categorical(X_df, cat_cols)
+    )
+    non_numeric = X_df.select_dtypes(exclude=[np.number]).columns.tolist()
+    if non_numeric:
+        raise ValueError(
+            f"Non-numeric columns remain after encoding: {non_numeric}. "
+            f"Add them to `categorical_cols` or drop them explicitly."
+        )
+    return X_df, y, le, is_test_mask
+
+
 def run_feature_selection(
     csv_path: str,
     label_col: str,
@@ -247,6 +279,7 @@ def run_feature_selection(
     seed: int = 42,
     dataset_name: str = "dataset",
     output_dir: str = ".",
+    test_csv: str | None = None,
 ):
     topk = topk or [10, 20, 30]
 
@@ -255,6 +288,7 @@ def run_feature_selection(
     run_settings = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "csv_path": csv_path,
+        "test_csv": test_csv,
         "label_col": label_col,
         "categorical_cols": categorical_cols or [],
         "categorical_mode": categorical_mode,
@@ -273,18 +307,30 @@ def run_feature_selection(
     with open(f"{output_dir}/{dataset_name}_run_settings.json", "w") as f:
         json.dump(run_settings, f, indent=2)
 
-    df = pd.read_csv(csv_path)
-    X_df, y, le = preprocess_full_pipeline(
-        df, label_col, categorical_cols, categorical_mode=categorical_mode
-    )
-    feature_names = X_df.columns.tolist()
+    is_test_mask = None
+    if test_csv is not None:
+        # Externally pre-split dataset (e.g. prepare_pcap_dataset.py's
+        # per-file time-ordered split) -- importance is computed on the
+        # provided train file only, same as the random-split path below.
+        X_df, y, le, is_test_mask = _load_presplit(
+            csv_path, test_csv, label_col, categorical_cols, categorical_mode
+        )
+        feature_names = X_df.columns.tolist()
+        X_train_raw = X_df.loc[~is_test_mask].values.astype(np.float32)
+        y_train = y[~is_test_mask]
+    else:
+        df = pd.read_csv(csv_path)
+        X_df, y, le = preprocess_full_pipeline(
+            df, label_col, categorical_cols, categorical_mode=categorical_mode
+        )
+        feature_names = X_df.columns.tolist()
 
-    # Same split as train.py so importance is computed on TRAIN only
-    # (research plan Section 2.3-(4): no leakage into val/test).
-    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
-        X_df.values.astype(np.float32), y,
-        test_size=test_size, random_state=seed, stratify=y,
-    )
+        # Same split as train.py so importance is computed on TRAIN only
+        # (research plan Section 2.3-(4): no leakage into val/test).
+        X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+            X_df.values.astype(np.float32), y,
+            test_size=test_size, random_state=seed, stratify=y,
+        )
     scaler = MinMaxScaler()
     X_train = scaler.fit_transform(X_train_raw)
 
@@ -325,11 +371,22 @@ def run_feature_selection(
     shap_order = df_rank.sort_values("shap_rank")["feature"].tolist()
     for k in topk:
         k = min(k, len(feature_names))
-        write_selected_csv(X_df, y, le, rf_order[:k], label_col,
-                            f"{output_dir}/{dataset_name}_rf_top{k}.csv")
-        write_selected_csv(X_df, y, le, shap_order[:k], label_col,
-                            f"{output_dir}/{dataset_name}_shap_top{k}.csv")
-        print(f"Wrote {dataset_name}_rf_top{k}.csv / {dataset_name}_shap_top{k}.csv")
+        if is_test_mask is not None:
+            # Pre-split input -> write a matching reduced train/test pair so
+            # the result can be fed straight back into train.py's --csv /
+            # --test_csv (one fixed split, not re-derived from --test_size).
+            for method, order in (("rf", rf_order), ("shap", shap_order)):
+                write_selected_csv(X_df.loc[~is_test_mask], y[~is_test_mask], le, order[:k],
+                                    label_col, f"{output_dir}/{dataset_name}_{method}_top{k}_train.csv")
+                write_selected_csv(X_df.loc[is_test_mask], y[is_test_mask], le, order[:k],
+                                    label_col, f"{output_dir}/{dataset_name}_{method}_top{k}_test.csv")
+                print(f"Wrote {dataset_name}_{method}_top{k}_train.csv / _test.csv")
+        else:
+            write_selected_csv(X_df, y, le, rf_order[:k], label_col,
+                                f"{output_dir}/{dataset_name}_rf_top{k}.csv")
+            write_selected_csv(X_df, y, le, shap_order[:k], label_col,
+                                f"{output_dir}/{dataset_name}_shap_top{k}.csv")
+            print(f"Wrote {dataset_name}_rf_top{k}.csv / {dataset_name}_shap_top{k}.csv")
 
     timing = {
         "rf_fit_seconds": rf_time_s,
@@ -381,10 +438,20 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--name", default="dataset")
     parser.add_argument("--output_dir", default=".")
+    parser.add_argument(
+        "--test_csv", default=None,
+        help="Path to a separately-prepared test CSV (e.g. from "
+             "prepare_pcap_dataset.py). When given, --csv is treated as the "
+             "pre-split TRAIN file: importance is computed on it only, "
+             "--test_size is ignored, and the rf_top{k}/shap_top{k} outputs "
+             "are written as _train.csv/_test.csv pairs instead of one "
+             "combined file.",
+    )
     args = parser.parse_args()
 
     run_feature_selection(
         csv_path=args.csv,
+        test_csv=args.test_csv,
         label_col=args.label_col,
         categorical_cols=args.categorical_cols,
         categorical_mode=args.categorical_mode,
