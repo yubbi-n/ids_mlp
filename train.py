@@ -453,7 +453,7 @@ def train_and_evaluate(
         "best_epoch": best_epoch, "epochs": epochs, "select_best_epoch": select_best_epoch,
         "embedding_activation": embedding_activation, "layer_norm": layer_norm,
         "lr_scheduler": lr_scheduler,
-        "csv_path": csv_path, "test_csv": test_csv, "dataset_name": dataset_name,
+        "csv_path": csv_path, "test_csv": test_csv, "seed": seed, "dataset_name": dataset_name,
     }
     with open(f"{output_dir}/{dataset_name}_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
@@ -495,6 +495,13 @@ if __name__ == "__main__":
              "oscillation a fixed high lr causes (see README.md).",
     )
     parser.add_argument("--name", default="dataset", help="Dataset name (for logging/plots)")
+    parser.add_argument(
+        "--seed", type=int, default=42,
+        help="Seed for torch (weight init, DataLoader shuffling) and the "
+             "sklearn train/val/test splits. Vary this across repeated runs "
+             "of the same config to check how much of a result is "
+             "training-randomness noise vs. a real difference.",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-3)
@@ -550,6 +557,7 @@ if __name__ == "__main__":
         val_size=args.val_size,
         select_best_epoch=not args.no_select_best_epoch,
         scale_before_split=not args.no_scale_before_split,
+        seed=args.seed,
         dataset_name=args.name,
         output_dir=args.output_dir,
     )
