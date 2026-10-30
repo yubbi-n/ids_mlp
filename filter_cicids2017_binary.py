@@ -29,33 +29,71 @@ schema). The comparison is "does the same lightweight-MLP methodology
 reach similar accuracy on this dataset", not "does this exact trained
 model generalize zero-shot".
 
+`--extra_benign_files` pulls in BENIGN rows from CICIDS2017's other six
+capture files (Monday/Tuesday/Wednesday/Thursday x2/Friday-Morning,
+Friday-Afternoon-PortScan), matching the teammate's own RF experiment's
+scope (a full-week BENIGN pool, ~1.86M rows, instead of just the ~97.7K
+BENIGN rows that happen to fall in the Friday-Afternoon-DDoS capture).
+Only BENIGN rows are taken from these files -- their other attack types
+(PortScan, WebAttacks, Infiltration, ...) are dropped, since this is
+still a Benign-vs-DDoS binary task, not a multi-attack one.
+
 Usage:
+    # Original (Friday-only BENIGN, ~97.7K rows):
     python filter_cicids2017_binary.py \
         --in "data/CICIDS2017/MachineLearningCVE/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv" \
         --out data/CICIDS2017/cicids2017_binary_ddos.csv
+
+    # Full-week BENIGN pool (~1.86M rows), matching the teammate's RF scope:
+    python filter_cicids2017_binary.py \
+        --in "data/CICIDS2017/MachineLearningCVE/Friday-WorkingHours-Afternoon-DDos.pcap_ISCX.csv" \
+        --extra_benign_files \
+            "data/CICIDS2017/MachineLearningCVE/Monday-WorkingHours.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Tuesday-WorkingHours.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Wednesday-workingHours.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Thursday-WorkingHours-Morning-WebAttacks.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Thursday-WorkingHours-Afternoon-Infilteration.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Friday-WorkingHours-Morning.pcap_ISCX.csv" \
+            "data/CICIDS2017/MachineLearningCVE/Friday-WorkingHours-Afternoon-PortScan.pcap_ISCX.csv" \
+        --out data/CICIDS2017/cicids2017_binary_ddos_fullweek.csv
 """
 
 import argparse
 import pandas as pd
 
 
-def filter_binary(csv_in: str, csv_out: str, label_col: str = "Label"):
-    df = pd.read_csv(csv_in)
+def _load_clean(csv_path: str) -> pd.DataFrame:
+    df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
-
     dup_cols = df.columns[df.columns.duplicated()].tolist()
     if dup_cols:
-        print(f"Dropping duplicate column(s) (keeping first occurrence): {dup_cols}")
+        print(f"  Dropping duplicate column(s) (keeping first occurrence): {dup_cols}")
         df = df.loc[:, ~df.columns.duplicated()]
+    return df
+
+
+def filter_binary(csv_in: str, csv_out: str, label_col: str = "Label",
+                   extra_benign_files: list[str] | None = None):
+    df = _load_clean(csv_in)
 
     mask = df[label_col].isin(["BENIGN", "DDoS"])
     n_dropped = int((~mask).sum())
     df = df[mask].copy()
+    print(f"{csv_in}: kept {len(df):,} BENIGN/DDoS rows, dropped {n_dropped:,} other rows")
+
+    extra_frames = []
+    for path in extra_benign_files or []:
+        edf = _load_clean(path)
+        edf = edf[edf[label_col] == "BENIGN"].copy()
+        print(f"{path}: +{len(edf):,} BENIGN rows")
+        extra_frames.append(edf)
+
+    if extra_frames:
+        df = pd.concat([df] + extra_frames, ignore_index=True)
 
     df.to_csv(csv_out, index=False)
 
-    print(f"Dropped {n_dropped} rows that are neither BENIGN nor DDoS")
-    print(f"Wrote {csv_out}  shape={df.shape}")
+    print(f"\nWrote {csv_out}  shape={df.shape}")
     print(df[label_col].value_counts())
 
 
@@ -64,5 +102,10 @@ if __name__ == "__main__":
     parser.add_argument("--in", dest="csv_in", required=True)
     parser.add_argument("--out", dest="csv_out", required=True)
     parser.add_argument("--label_col", default="Label")
+    parser.add_argument(
+        "--extra_benign_files", nargs="*", default=[],
+        help="Additional CICIDS2017 capture CSVs to pull BENIGN-only rows from "
+             "(their other attack types are dropped).",
+    )
     args = parser.parse_args()
-    filter_binary(args.csv_in, args.csv_out, args.label_col)
+    filter_binary(args.csv_in, args.csv_out, args.label_col, args.extra_benign_files)
