@@ -72,8 +72,31 @@ def _load_clean(csv_path: str) -> pd.DataFrame:
     return df
 
 
+def _dedup_and_resolve_conflicts(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
+    """
+    Matches the teammate's prepare_cicids2017_flows.py cleaning: rows whose
+    numeric features are byte-for-byte identical are collapsed to one
+    (global, across the whole combined pool -- so duplicates introduced by
+    merging multiple days' files are caught too), and rows whose features
+    are identical but whose labels disagree (an ambiguous CICFlowMeter
+    artifact) are dropped entirely rather than arbitrarily picking one.
+    """
+    feature_cols = [c for c in df.columns if c != label_col]
+    numeric = df[feature_cols].apply(pd.to_numeric, errors="coerce")
+    fingerprint = pd.util.hash_pandas_object(numeric, index=False)
+
+    label_counts = pd.DataFrame({"hash": fingerprint, "y": df[label_col]}).groupby("hash")["y"].nunique()
+    conflict_hashes = set(label_counts.index[label_counts > 1])
+    is_conflict = fingerprint.isin(conflict_hashes)
+    is_duplicate = fingerprint.duplicated(keep="first") & ~is_conflict
+
+    print(f"Dedup: removed {int(is_conflict.sum()):,} feature-identical-but-conflicting-label rows, "
+          f"{int(is_duplicate.sum()):,} feature-identical duplicate rows (kept first occurrence)")
+    return df.loc[~is_conflict & ~is_duplicate].reset_index(drop=True)
+
+
 def filter_binary(csv_in: str, csv_out: str, label_col: str = "Label",
-                   extra_benign_files: list[str] | None = None):
+                   extra_benign_files: list[str] | None = None, dedup: bool = True):
     df = _load_clean(csv_in)
 
     mask = df[label_col].isin(["BENIGN", "DDoS"])
@@ -91,6 +114,9 @@ def filter_binary(csv_in: str, csv_out: str, label_col: str = "Label",
     if extra_frames:
         df = pd.concat([df] + extra_frames, ignore_index=True)
 
+    if dedup:
+        df = _dedup_and_resolve_conflicts(df, label_col)
+
     df.to_csv(csv_out, index=False)
 
     print(f"\nWrote {csv_out}  shape={df.shape}")
@@ -107,5 +133,12 @@ if __name__ == "__main__":
         help="Additional CICIDS2017 capture CSVs to pull BENIGN-only rows from "
              "(their other attack types are dropped).",
     )
+    parser.add_argument(
+        "--no_dedup", action="store_true",
+        help="Skip the feature-identical duplicate/conflicting-label cleanup "
+             "(default: applied, matching the teammate's own CICIDS2017 "
+             "cleaning in prepare_cicids2017_flows.py).",
+    )
     args = parser.parse_args()
-    filter_binary(args.csv_in, args.csv_out, args.label_col, args.extra_benign_files)
+    filter_binary(args.csv_in, args.csv_out, args.label_col, args.extra_benign_files,
+                   dedup=not args.no_dedup)
