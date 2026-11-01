@@ -62,13 +62,31 @@ import argparse
 import pandas as pd
 
 
+# 'Fwd Header Length' appears twice in the raw CSV (a known CICFlowMeter/
+# CICIDS2017 quirk). pandas' read_csv silently renames the SECOND occurrence
+# to 'Fwd Header Length.1' while parsing -- by the time this function sees
+# df.columns, the two names already differ, so a generic
+# `df.columns.duplicated()` check can never catch this (it only catches
+# names that are still literally identical after parsing). Drop the known
+# renamed duplicate by its exact name instead, matching the teammate's own
+# EXCLUDE list in prepare_cicids2017_flows.py.
+KNOWN_DUPLICATE_COLUMNS = ["Fwd Header Length.1"]
+
+
 def _load_clean(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
+
     dup_cols = df.columns[df.columns.duplicated()].tolist()
     if dup_cols:
         print(f"  Dropping duplicate column(s) (keeping first occurrence): {dup_cols}")
         df = df.loc[:, ~df.columns.duplicated()]
+
+    known_dupes_present = [c for c in KNOWN_DUPLICATE_COLUMNS if c in df.columns]
+    if known_dupes_present:
+        print(f"  Dropping known pandas-renamed duplicate column(s): {known_dupes_present}")
+        df = df.drop(columns=known_dupes_present)
+
     return df
 
 
